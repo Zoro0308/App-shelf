@@ -30,43 +30,22 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Configure Android SDK & Licenses (Bypassing broken setup-android@v3)
+      - name: Configure Android SDK Licenses (Zero sdkmanager / setup-android dependency)
         shell: bash
-        env:
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-          ANDROID_HOME: /usr/local/lib/android/sdk
         run: |
           set -euo pipefail
+          SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
 
-          # Export SDK paths for subsequent Gradle build steps
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-
-          # Pre-populate official Google Android SDK license hashes so AGP 8.4.1 can
-          # auto-download platforms;android-34 and build-tools;34.0.0 even without sdkmanager
-          mkdir -p "$ANDROID_SDK_ROOT/licenses"
-          printf "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
-          printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$ANDROID_SDK_ROOT/licenses/android-sdk-preview-license"
-
-          # Locate the newest pre-installed sdkmanager binary on ubuntu-latest
-          SDKMANAGER_BIN=""
-          if [ -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            SDKMANAGER_BIN="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          else
-            for candidate in $(ls -d "$ANDROID_SDK_ROOT"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V); do
-              if [ -x "$candidate" ]; then
-                SDKMANAGER_BIN="$candidate"
-              fi
-            done
-          fi
-
-          if [ -n "$SDKMANAGER_BIN" ]; then
-            echo "==> Found sdkmanager at $SDKMANAGER_BIN"
-            set +o pipefail
-            yes | "$SDKMANAGER_BIN" --sdk_root="$ANDROID_SDK_ROOT" --licenses > /dev/null 2>&1 || true
-            "$SDKMANAGER_BIN" --sdk_root="$ANDROID_SDK_ROOT" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
-            set -o pipefail
-          fi
+          # Write official Google Android SDK license hashes directly.
+          # Android Gradle Plugin 8.4.1 uses these hashes to validate pre-installed SDK 34
+          # packages on ubuntu-latest (and auto-download any missing ones during assembleDebug)
+          # without ever invoking sdkmanager or android-actions/setup-android@v3.
+          mkdir -p "$SDK_DIR/licenses"
+          printf "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$SDK_DIR/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK_DIR/licenses/android-sdk-preview-license"
+          echo "==> Configured Android SDK at $SDK_DIR with pre-accepted license hashes."
 
       - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
@@ -1380,7 +1359,7 @@ jobs:
               private fun populateInstanceSpinner() {
                   val labels = activeWidgetIds.mapIndexed { index, widgetId ->
                       val filledCount = shelfPreferences.getAllSlots(widgetId).size
-                      val suffix = if (widgetId == configuredWidgetId && isConfigureFlow) " â€¢ New" else ""
+                      val suffix = if (widgetId == configuredWidgetId && isConfigureFlow) " • New" else ""
                       getString(
                           R.string.widget_instance_option_format,
                           index + 1,
@@ -2657,15 +2636,15 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="app_name">ShelfWidget</string>
-              <string name="widget_name">Glass Shelf (4Ã—3)</string>
+              <string name="widget_name">Glass Shelf (4×3)</string>
               <string name="widget_description">Procedural 2.5D frosted glass shelf with 12 independent app shortcuts across 4 tiers.</string>
               <string name="widget_bg_content_description">Frosted glass shelves</string>
 
               <string name="manager_title">Shelf Widget Manager</string>
               <string name="manager_subtitle">Independent 4-shelf, 12-slot configuration per widget instance</string>
               <string name="label_select_widget_instance">Active Widget Instance</string>
-              <string name="widget_instance_option_format">Instance #%1$d (Widget ID %2$d) â€” %3$d/%4$d slots%5$s</string>
-              <string name="instance_status_summary_format">Editing Widget ID #%1$d â€¢ %2$d of %3$d slots assigned (%4$d total active widget(s) on home screen)</string>
+              <string name="widget_instance_option_format">Instance #%1$d (Widget ID %2$d) — %3$d/%4$d slots%5$s</string>
+              <string name="instance_status_summary_format">Editing Widget ID #%1$d • %2$d of %3$d slots assigned (%4$d total active widget(s) on home screen)</string>
 
               <string name="action_add_another_widget">+ Pin New Widget</string>
               <string name="action_clear_all_slots">Clear All 12 Slots</string>
@@ -2678,15 +2657,15 @@ jobs:
               <string name="action_clear_all">Clear All</string>
 
               <string name="empty_state_title">No ShelfWidget Placed Yet</string>
-              <string name="empty_state_instructions">Add a ShelfWidget to your Xiaomi Pad 8 or Android home screen first (long-press the home screen â†’ Widgets â†’ ShelfWidget, or tap the button below). Each widget you place gets its own independent set of 12 app slots.</string>
-              <string name="preview_section_hint">Tap any of the 12 slots on the 4 shelves below to assign or change its app. Tap Ã— on a populated slot to clear it.</string>
+              <string name="empty_state_instructions">Add a ShelfWidget to your Xiaomi Pad 8 or Android home screen first (long-press the home screen → Widgets → ShelfWidget, or tap the button below). Each widget you place gets its own independent set of 12 app slots.</string>
+              <string name="preview_section_hint">Tap any of the 12 slots on the 4 shelves below to assign or change its app. Tap × on a populated slot to clear it.</string>
               <string name="slot_empty_tap_to_add">Empty (Tap to add)</string>
-              <string name="slot_badge_format">S%1$dâ€¢%2$d</string>
+              <string name="slot_badge_format">S%1$d•%2$d</string>
 
-              <string name="picker_dialog_title_format">Select App â€” Shelf %1$d, Slot %2$d</string>
-              <string name="picker_dialog_subtitle_assigned">Widget #%1$d â€¢ Currently assigned: %2$s</string>
-              <string name="picker_dialog_subtitle_empty">Widget #%1$d â€¢ Currently unassigned</string>
-              <string name="hint_search_apps">Search by app name or packageâ€¦</string>
+              <string name="picker_dialog_title_format">Select App — Shelf %1$d, Slot %2$d</string>
+              <string name="picker_dialog_subtitle_assigned">Widget #%1$d • Currently assigned: %2$s</string>
+              <string name="picker_dialog_subtitle_empty">Widget #%1$d • Currently unassigned</string>
+              <string name="hint_search_apps">Search by app name or package…</string>
               <string name="picker_no_matching_apps">No launchable apps match your search.</string>
 
               <string name="dialog_clear_all_title">Clear All 12 Slots?</string>
