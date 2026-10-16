@@ -30,15 +30,60 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK Licenses & Ensure SDK 34
+      - name: Configure Android SDK & Ensure SDK 34
         shell: bash
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          ANDROID_HOME: /usr/local/lib/android/sdk
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+          # Export SDK paths for subsequent Gradle build steps
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+          # Locate the pre-installed sdkmanager binary on ubuntu-latest without using
+          # android-actions/setup-android@v3 (which calls deprecated 'sdkmanager tools' and fails on 16.0)
+          SDKMANAGER_BIN=""
+          if [ -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER_BIN="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          else
+            for candidate in $(ls -d "$ANDROID_SDK_ROOT"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V); do
+              if [ -x "$candidate" ]; then
+                SDKMANAGER_BIN="$candidate"
+              fi
+            done
+          fi
+
+          if [ -z "$SDKMANAGER_BIN" ]; then
+            SDKMANAGER_BIN="$(command -v sdkmanager)"
+          fi
+
+          echo "==> Using sdkmanager: $SDKMANAGER_BIN"
+
+          # Accept all Android SDK licenses first (disable pipefail briefly to ignore yes SIGPIPE 141)
+          set +o pipefail
+          yes | "$SDKMANAGER_BIN" --sdk_root="$ANDROID_SDK_ROOT" --licenses > /dev/null 2>&1 || true
+          set -o pipefail
+
+          # Install cmdline-tools;latest first, then platform-tools, platforms;android-34, and build-tools;34.0.0
+          # Retry up to 3 times to guard against transient network/repository metadata hiccups
+          for attempt in 1 2 3; do
+            echo "==> Installing Android SDK packages (attempt $attempt/3)..."
+            if "$SDKMANAGER_BIN" --sdk_root="$ANDROID_SDK_ROOT" --install               "cmdline-tools;latest"               "platform-tools"               "platforms;android-34"               "build-tools;34.0.0"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "ERROR: sdkmanager package installation failed after 3 attempts." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          # Re-accept any newly downloaded license agreements
+          set +o pipefail
+          yes | "$SDKMANAGER_BIN" --sdk_root="$ANDROID_SDK_ROOT" --licenses > /dev/null 2>&1 || true
+          set -o pipefail
 
       - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
@@ -51,7 +96,7 @@ jobs:
           set -euo pipefail
 
           echo "==> Cleaning workspace for conflict-free idempotent generation..."
-          rm -rf app gradle gradlew gradlew.bat settings.gradle.kts build.gradle.kts gradle.properties
+          rm -rf app gradle gradlew gradlew.bat settings.gradle.kts build.gradle.kts gradle.properties local.properties
 
           echo "==> Creating Android project directory hierarchy..."
           mkdir -p gradle/wrapper
@@ -109,6 +154,10 @@ jobs:
           android.nonTransitiveRClass=true
           kotlin.code.style=official
           EOF
+
+          if [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "${ANDROID_SDK_ROOT}" ]; then
+            echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
+          fi
 
           cat << 'EOF' > app/proguard-rules.pro
           -keep class com.example.shelfwidget.ShelfWidgetProvider { *; }
@@ -1348,7 +1397,7 @@ jobs:
               private fun populateInstanceSpinner() {
                   val labels = activeWidgetIds.mapIndexed { index, widgetId ->
                       val filledCount = shelfPreferences.getAllSlots(widgetId).size
-                      val suffix = if (widgetId == configuredWidgetId && isConfigureFlow) " • New" else ""
+                      val suffix = if (widgetId == configuredWidgetId && isConfigureFlow) " â€¢ New" else ""
                       getString(
                           R.string.widget_instance_option_format,
                           index + 1,
@@ -2625,15 +2674,15 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="app_name">ShelfWidget</string>
-              <string name="widget_name">Glass Shelf (4×3)</string>
+              <string name="widget_name">Glass Shelf (4Ã—3)</string>
               <string name="widget_description">Procedural 2.5D frosted glass shelf with 12 independent app shortcuts across 4 tiers.</string>
               <string name="widget_bg_content_description">Frosted glass shelves</string>
 
               <string name="manager_title">Shelf Widget Manager</string>
               <string name="manager_subtitle">Independent 4-shelf, 12-slot configuration per widget instance</string>
               <string name="label_select_widget_instance">Active Widget Instance</string>
-              <string name="widget_instance_option_format">Instance #%1$d (Widget ID %2$d) — %3$d/%4$d slots%5$s</string>
-              <string name="instance_status_summary_format">Editing Widget ID #%1$d • %2$d of %3$d slots assigned (%4$d total active widget(s) on home screen)</string>
+              <string name="widget_instance_option_format">Instance #%1$d (Widget ID %2$d) â€” %3$d/%4$d slots%5$s</string>
+              <string name="instance_status_summary_format">Editing Widget ID #%1$d â€¢ %2$d of %3$d slots assigned (%4$d total active widget(s) on home screen)</string>
 
               <string name="action_add_another_widget">+ Pin New Widget</string>
               <string name="action_clear_all_slots">Clear All 12 Slots</string>
@@ -2646,15 +2695,15 @@ jobs:
               <string name="action_clear_all">Clear All</string>
 
               <string name="empty_state_title">No ShelfWidget Placed Yet</string>
-              <string name="empty_state_instructions">Add a ShelfWidget to your Xiaomi Pad 8 or Android home screen first (long-press the home screen → Widgets → ShelfWidget, or tap the button below). Each widget you place gets its own independent set of 12 app slots.</string>
-              <string name="preview_section_hint">Tap any of the 12 slots on the 4 shelves below to assign or change its app. Tap × on a populated slot to clear it.</string>
+              <string name="empty_state_instructions">Add a ShelfWidget to your Xiaomi Pad 8 or Android home screen first (long-press the home screen â†’ Widgets â†’ ShelfWidget, or tap the button below). Each widget you place gets its own independent set of 12 app slots.</string>
+              <string name="preview_section_hint">Tap any of the 12 slots on the 4 shelves below to assign or change its app. Tap Ã— on a populated slot to clear it.</string>
               <string name="slot_empty_tap_to_add">Empty (Tap to add)</string>
-              <string name="slot_badge_format">S%1$d•%2$d</string>
+              <string name="slot_badge_format">S%1$dâ€¢%2$d</string>
 
-              <string name="picker_dialog_title_format">Select App — Shelf %1$d, Slot %2$d</string>
-              <string name="picker_dialog_subtitle_assigned">Widget #%1$d • Currently assigned: %2$s</string>
-              <string name="picker_dialog_subtitle_empty">Widget #%1$d • Currently unassigned</string>
-              <string name="hint_search_apps">Search by app name or package…</string>
+              <string name="picker_dialog_title_format">Select App â€” Shelf %1$d, Slot %2$d</string>
+              <string name="picker_dialog_subtitle_assigned">Widget #%1$d â€¢ Currently assigned: %2$s</string>
+              <string name="picker_dialog_subtitle_empty">Widget #%1$d â€¢ Currently unassigned</string>
+              <string name="hint_search_apps">Search by app name or packageâ€¦</string>
               <string name="picker_no_matching_apps">No launchable apps match your search.</string>
 
               <string name="dialog_clear_all_title">Clear All 12 Slots?</string>
