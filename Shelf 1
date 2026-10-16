@@ -1,0 +1,2719 @@
+name: Build ShelfWidget APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Generate Project & Build Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK Licenses & Ensure SDK 34
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Generate Complete ShelfWidget Android Project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "==> Cleaning workspace for conflict-free idempotent generation..."
+          rm -rf app gradle gradlew gradlew.bat settings.gradle.kts build.gradle.kts gradle.properties
+
+          echo "==> Creating Android project directory hierarchy..."
+          mkdir -p gradle/wrapper
+          mkdir -p app/src/main/java/com/example/shelfwidget
+          mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/res/xml
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+
+          # ------------------------------------------------------------------------------
+          # 1. Gradle Wrapper & Root Build Configuration
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > gradle/wrapper/gradle-wrapper.properties
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip
+          networkTimeout=10000
+          validateDistributionUrl=true
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+
+          cat << 'EOF' > settings.gradle.kts
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "ShelfWidget"
+          include(":app")
+          EOF
+
+          cat << 'EOF' > build.gradle.kts
+          plugins {
+              id("com.android.application") version "8.4.1" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          kotlin.code.style=official
+          EOF
+
+          cat << 'EOF' > app/proguard-rules.pro
+          -keep class com.example.shelfwidget.ShelfWidgetProvider { *; }
+          -keep class com.example.shelfwidget.MainActivity { *; }
+          EOF
+
+          cat << 'EOF' > app/build.gradle.kts
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.example.shelfwidget"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.example.shelfwidget"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0.0"
+              }
+
+              buildTypes {
+                  debug {
+                      isMinifyEnabled = false
+                      isDebuggable = true
+                  }
+                  release {
+                      isMinifyEnabled = false
+                      proguardFiles(
+                          getDefaultProguardFile("proguard-android-optimize.txt"),
+                          "proguard-rules.pro"
+                      )
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              buildFeatures {
+                  viewBinding = false
+                  buildConfig = true
+              }
+          }
+
+          dependencies {
+              implementation("androidx.core:core-ktx:1.13.1")
+              implementation("androidx.appcompat:appcompat:1.7.0")
+              implementation("com.google.android.material:material:1.12.0")
+              implementation("androidx.recyclerview:recyclerview:1.3.2")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+          }
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 2. AndroidManifest.xml (Offline Guarantee: Zero Internet Permissions)
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <!-- Package visibility for discovering launchable applications on Android 11+ (API 30+) -->
+              <!-- Strictly offline by design: android.permission.INTERNET is NOT declared -->
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.ShelfWidget">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:label="@string/app_name"
+                      android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+                      </intent-filter>
+                  </activity>
+
+                  <receiver
+                      android:name=".ShelfWidgetProvider"
+                      android:exported="true"
+                      android:label="@string/widget_name">
+                      <intent-filter>
+                          <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                          <action android:name="com.example.shelfwidget.ACTION_REFRESH_WIDGET" />
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.PACKAGE_ADDED" />
+                          <action android:name="android.intent.action.PACKAGE_REMOVED" />
+                          <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                          <data android:scheme="package" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.appwidget.provider"
+                          android:resource="@xml/shelf_widget_info" />
+                  </receiver>
+
+              </application>
+
+          </manifest>
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 3. Kotlin Source: ShelfPreferences.kt
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/java/com/example/shelfwidget/ShelfPreferences.kt
+          package com.example.shelfwidget
+
+          import android.appwidget.AppWidgetManager
+          import android.content.Context
+          import android.content.SharedPreferences
+
+          /**
+           * Persistent local storage repository for ShelfWidget slot assignments.
+           * Every widget instance (identified by [appWidgetId]) owns an independent namespace
+           * of 12 slots (indices 0..11). Updating Widget A never modifies Widget B.
+           */
+          class ShelfPreferences(context: Context) {
+
+              private val prefs: SharedPreferences = context.applicationContext
+                  .getSharedPreferences(PREFS_FILE_NAME, Context.MODE_PRIVATE)
+
+              fun saveAppToSlot(appWidgetId: Int, slotIndex: Int, packageName: String) {
+                  if (!isValidWidgetAndSlot(appWidgetId, slotIndex)) return
+                  val sanitizedPkg = packageName.trim()
+                  if (sanitizedPkg.isEmpty()) {
+                      clearSlot(appWidgetId, slotIndex)
+                      return
+                  }
+                  prefs.edit()
+                      .putBoolean(initKey(appWidgetId), true)
+                      .putString(slotKey(appWidgetId, slotIndex), sanitizedPkg)
+                      .putLong(revisionKey(appWidgetId), System.nanoTime())
+                      .apply()
+              }
+
+              fun getAppForSlot(appWidgetId: Int, slotIndex: Int): String? {
+                  if (!isValidWidgetAndSlot(appWidgetId, slotIndex)) return null
+                  val value = prefs.getString(slotKey(appWidgetId, slotIndex), null)?.trim()
+                  return if (value.isNullOrEmpty()) null else value
+              }
+
+              fun clearSlot(appWidgetId: Int, slotIndex: Int) {
+                  if (!isValidWidgetAndSlot(appWidgetId, slotIndex)) return
+                  prefs.edit()
+                      .putBoolean(initKey(appWidgetId), true)
+                      .remove(slotKey(appWidgetId, slotIndex))
+                      .putLong(revisionKey(appWidgetId), System.nanoTime())
+                      .apply()
+              }
+
+              fun getAllSlots(appWidgetId: Int): Map<Int, String> {
+                  if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return emptyMap()
+                  val result = LinkedHashMap<Int, String>(TOTAL_SLOTS)
+                  for (slotIndex in 0 until TOTAL_SLOTS) {
+                      val pkg = getAppForSlot(appWidgetId, slotIndex)
+                      if (!pkg.isNullOrEmpty()) {
+                          result[slotIndex] = pkg
+                      }
+                  }
+                  return result
+              }
+
+              fun ensureWidgetInitialized(appWidgetId: Int) {
+                  if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                  if (!prefs.getBoolean(initKey(appWidgetId), false)) {
+                      prefs.edit()
+                          .putBoolean(initKey(appWidgetId), true)
+                          .putLong(revisionKey(appWidgetId), System.nanoTime())
+                          .apply()
+                  }
+              }
+
+              fun clearAllSlotsForWidget(appWidgetId: Int) {
+                  if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                  val editor = prefs.edit()
+                  for (slotIndex in 0 until TOTAL_SLOTS) {
+                      editor.remove(slotKey(appWidgetId, slotIndex))
+                  }
+                  editor.putBoolean(initKey(appWidgetId), true)
+                  editor.putLong(revisionKey(appWidgetId), System.nanoTime())
+                  editor.apply()
+              }
+
+              fun clearWidget(appWidgetId: Int) {
+                  if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                  val editor = prefs.edit()
+                  for (slotIndex in 0 until TOTAL_SLOTS) {
+                      editor.remove(slotKey(appWidgetId, slotIndex))
+                  }
+                  editor.remove(initKey(appWidgetId))
+                  editor.remove(revisionKey(appWidgetId))
+                  editor.apply()
+              }
+
+              fun getWidgetRevision(appWidgetId: Int): Long {
+                  if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return 0L
+                  return prefs.getLong(revisionKey(appWidgetId), 0L)
+              }
+
+              fun pruneOrphanedWidgets(activeWidgetIds: IntArray) {
+                  val activeSet = activeWidgetIds.toSet()
+                  val allKeys = prefs.all.keys.toList()
+                  val editor = prefs.edit()
+                  var modified = false
+
+                  for (key in allKeys) {
+                      val extractedId = extractWidgetIdFromKey(key)
+                      if (extractedId != null && !activeSet.contains(extractedId)) {
+                          editor.remove(key)
+                          modified = true
+                      }
+                  }
+                  if (modified) {
+                      editor.apply()
+                  }
+              }
+
+              private fun isValidWidgetAndSlot(appWidgetId: Int, slotIndex: Int): Boolean {
+                  return appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID &&
+                      slotIndex in 0 until TOTAL_SLOTS
+              }
+
+              private fun slotKey(appWidgetId: Int, slotIndex: Int): String =
+                  "widget_${appWidgetId}_slot_${slotIndex}"
+
+              private fun initKey(appWidgetId: Int): String =
+                  "widget_${appWidgetId}_initialized"
+
+              private fun revisionKey(appWidgetId: Int): String =
+                  "widget_${appWidgetId}_revision"
+
+              private fun extractWidgetIdFromKey(key: String): Int? {
+                  if (!key.startsWith("widget_")) return null
+                  val afterPrefix = key.removePrefix("widget_")
+                  val underscoreIdx = afterPrefix.indexOf('_')
+                  if (underscoreIdx <= 0) return null
+                  return afterPrefix.substring(0, underscoreIdx).toIntOrNull()
+              }
+
+              companion object {
+                  private const val PREFS_FILE_NAME = "shelf_widget_independent_prefs"
+                  const val TOTAL_SLOTS = 12
+                  const val SHELF_COUNT = 4
+                  const val SLOTS_PER_SHELF = 3
+              }
+          }
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 4. Kotlin Source: ShelfCanvasRenderer.kt
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/java/com/example/shelfwidget/ShelfCanvasRenderer.kt
+          package com.example.shelfwidget
+
+          import android.graphics.Bitmap
+          import android.graphics.Canvas
+          import android.graphics.Color
+          import android.graphics.LinearGradient
+          import android.graphics.Paint
+          import android.graphics.Path
+          import android.graphics.RectF
+          import android.graphics.Shader
+          import android.util.LruCache
+          import kotlin.math.max
+          import kotlin.math.min
+          import kotlin.math.roundToInt
+
+          /**
+           * Procedural 2.5D Frosted Glass Shelf Rendering Engine.
+           * Generates the four-tier translucent glass shelf background in memory using
+           * Canvas, Paint, Path, and LinearGradient shaders with LRU bitmap caching.
+           */
+          object ShelfCanvasRenderer {
+
+              private const val SHELF_COUNT = 4
+              private const val MIN_DIMENSION_PX = 64
+              private const val MAX_DIMENSION_PX = 1440
+
+              private val bitmapCache = object : LruCache<String, Bitmap>(8 * 1024) {
+                  override fun sizeOf(key: String, value: Bitmap): Int {
+                      return max(1, value.allocationByteCountSafe() / 1024)
+                  }
+              }
+
+              private fun Bitmap.allocationByteCountSafe(): Int {
+                  return try {
+                      allocationByteCount
+                  } catch (_: Throwable) {
+                      rowBytes * height
+                  }
+              }
+
+              @Synchronized
+              fun renderShelves(width: Int, height: Int, density: Float): Bitmap {
+                  val safeDensity = if (density.isFinite() && density > 0f) {
+                      density.coerceIn(0.75f, 4.5f)
+                  } else {
+                      2.0f
+                  }
+
+                  val safeWidth = width.coerceIn(MIN_DIMENSION_PX, MAX_DIMENSION_PX)
+                  val safeHeight = height.coerceIn(MIN_DIMENSION_PX, MAX_DIMENSION_PX)
+                  val densityBucket = (safeDensity * 100f).roundToInt()
+                  val cacheKey = "${safeWidth}x${safeHeight}@$densityBucket"
+
+                  val cached = bitmapCache.get(cacheKey)
+                  if (cached != null && !cached.isRecycled) {
+                      return cached
+                  }
+
+                  val bitmap = Bitmap.createBitmap(safeWidth, safeHeight, Bitmap.Config.ARGB_8888)
+                  val canvas = Canvas(bitmap)
+                  drawGlassShelves(canvas, safeWidth.toFloat(), safeHeight.toFloat(), safeDensity)
+
+                  bitmapCache.put(cacheKey, bitmap)
+                  return bitmap
+              }
+
+              @Synchronized
+              fun clearCache() {
+                  bitmapCache.evictAll()
+              }
+
+              fun computeIconBottomOffsetPx(widgetHeightPx: Int, density: Float): Int {
+                  val safeHeight = widgetHeightPx.coerceIn(MIN_DIMENSION_PX, MAX_DIMENSION_PX).toFloat()
+                  val tierHeight = safeHeight / SHELF_COUNT.toFloat()
+                  val shelfTopFromTierBottom = tierHeight * 0.22f
+                  val minOffset = (6f * density).roundToInt()
+                  return max(minOffset, shelfTopFromTierBottom.roundToInt())
+              }
+
+              private fun drawGlassShelves(
+                  canvas: Canvas,
+                  totalWidth: Float,
+                  totalHeight: Float,
+                  density: Float
+              ) {
+                  val tierHeight = totalHeight / SHELF_COUNT.toFloat()
+                  val horizontalMargin = (totalWidth * 0.055f).coerceIn(6f * density, 28f * density)
+                  val shelfLeft = horizontalMargin
+                  val shelfRight = totalWidth - horizontalMargin
+                  val shelfSpan = max(32f, shelfRight - shelfLeft)
+
+                  val lipThickness = (tierHeight * 0.115f).coerceIn(7f * density, 18f * density)
+                  val deckDepth = (tierHeight * 0.135f).coerceIn(8f * density, 22f * density)
+                  val perspectiveInset = (shelfSpan * 0.045f).coerceIn(6f * density, 26f * density)
+
+                  val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+                  val ambientShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+                  val deckFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+                  val deckBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      style = Paint.Style.STROKE
+                      strokeWidth = max(1f, 0.9f * density)
+                      color = Color.argb(58, 225, 245, 255)
+                  }
+                  val lipFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+                  val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+                  val lipBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      style = Paint.Style.STROKE
+                      strokeWidth = max(1f, 1.15f * density)
+                  }
+                  val specularPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      style = Paint.Style.STROKE
+                      strokeCap = Paint.Cap.ROUND
+                      strokeWidth = max(1.5f, 1.65f * density)
+                  }
+                  val bottomReflectPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      style = Paint.Style.STROKE
+                      strokeCap = Paint.Cap.ROUND
+                      strokeWidth = max(1f, 1.05f * density)
+                  }
+
+                  val deckPath = Path()
+                  val clipPath = Path()
+                  val lipRect = RectF()
+                  val shadowRect = RectF()
+                  val ambientRect = RectF()
+
+                  for (i in 0 until SHELF_COUNT) {
+                      val tierTop = i * tierHeight
+                      val tierBottom = tierTop + tierHeight
+
+                      val lipTop = tierBottom - (tierHeight * 0.22f)
+                      val lipBottom = lipTop + lipThickness
+                      val deckTop = lipTop - deckDepth
+                      val pillRadius = lipThickness * 0.5f
+
+                      // 1. Soft multi-layer drop shadow beneath the shelf
+                      val shadowHeight = lipThickness * 1.15f
+                      val shadowInset = pillRadius * 0.35f
+                      shadowRect.set(
+                          shelfLeft + shadowInset,
+                          lipBottom - (lipThickness * 0.15f),
+                          shelfRight - shadowInset,
+                          min(tierBottom - 1f, lipBottom + shadowHeight)
+                      )
+                      shadowPaint.shader = LinearGradient(
+                          0f, shadowRect.top, 0f, shadowRect.bottom,
+                          intArrayOf(
+                              Color.argb(76, 6, 14, 28),
+                              Color.argb(34, 6, 14, 28),
+                              Color.argb(0, 6, 14, 28)
+                          ),
+                          floatArrayOf(0f, 0.55f, 1f),
+                          Shader.TileMode.CLAMP
+                      )
+                      canvas.drawRoundRect(shadowRect, pillRadius, pillRadius, shadowPaint)
+
+                      ambientRect.set(
+                          shelfLeft + pillRadius * 0.2f,
+                          lipBottom - 1f,
+                          shelfRight - pillRadius * 0.2f,
+                          lipBottom + (lipThickness * 0.42f)
+                      )
+                      ambientShadowPaint.shader = LinearGradient(
+                          0f, ambientRect.top, 0f, ambientRect.bottom,
+                          Color.argb(54, 0, 0, 0),
+                          Color.argb(0, 0, 0, 0),
+                          Shader.TileMode.CLAMP
+                      )
+                      canvas.drawRoundRect(ambientRect, pillRadius * 0.6f, pillRadius * 0.6f, ambientShadowPaint)
+
+                      // 2. 2.5D Receded Perspective Top Glass Deck
+                      val backLeft = shelfLeft + perspectiveInset
+                      val backRight = shelfRight - perspectiveInset
+                      val frontLeft = shelfLeft + (pillRadius * 0.35f)
+                      val frontRight = shelfRight - (pillRadius * 0.35f)
+                      val lipCenterY = lipTop + (lipThickness * 0.35f)
+
+                      deckPath.reset()
+                      deckPath.moveTo(backLeft, deckTop)
+                      deckPath.lineTo(backRight, deckTop)
+                      deckPath.lineTo(frontRight, lipCenterY)
+                      deckPath.lineTo(frontLeft, lipCenterY)
+                      deckPath.close()
+
+                      deckFillPaint.shader = LinearGradient(
+                          0f, deckTop, 0f, lipCenterY,
+                          intArrayOf(
+                              Color.argb(26, 225, 245, 255),
+                              Color.argb(58, 235, 248, 255),
+                              Color.argb(92, 255, 255, 255)
+                          ),
+                          floatArrayOf(0f, 0.65f, 1f),
+                          Shader.TileMode.CLAMP
+                      )
+                      canvas.drawPath(deckPath, deckFillPaint)
+                      canvas.drawPath(deckPath, deckBorderPaint)
+
+                      // 3. Main Front Frosted Glass Slab with Rounded Pill Ends
+                      lipRect.set(shelfLeft, lipTop, shelfRight, lipBottom)
+                      lipFillPaint.shader = LinearGradient(
+                          0f, lipTop, 0f, lipBottom,
+                          intArrayOf(
+                              Color.argb(156, 255, 255, 255),
+                              Color.argb(96, 222, 242, 255),
+                              Color.argb(68, 185, 222, 250),
+                              Color.argb(118, 240, 250, 255)
+                          ),
+                          floatArrayOf(0f, 0.35f, 0.75f, 1f),
+                          Shader.TileMode.CLAMP
+                      )
+                      canvas.drawRoundRect(lipRect, pillRadius, pillRadius, lipFillPaint)
+
+                      // 4. Layered Diagonal Glass Reflection Sheen
+                      canvas.save()
+                      clipPath.reset()
+                      clipPath.addRoundRect(lipRect, pillRadius, pillRadius, Path.Direction.CW)
+                      canvas.clipPath(clipPath)
+
+                      sheenPaint.shader = LinearGradient(
+                          shelfLeft, lipTop, shelfRight, lipBottom,
+                          intArrayOf(
+                              Color.argb(0, 255, 255, 255),
+                              Color.argb(52, 255, 255, 255),
+                              Color.argb(12, 255, 255, 255),
+                              Color.argb(44, 255, 255, 255),
+                              Color.argb(0, 255, 255, 255)
+                          ),
+                          floatArrayOf(0.08f, 0.26f, 0.50f, 0.76f, 0.92f),
+                          Shader.TileMode.CLAMP
+                      )
+                      canvas.drawRect(lipRect, sheenPaint)
+                      canvas.restore()
+
+                      // 5. Crisp Outer Glass Rim Stroke
+                      lipBorderPaint.shader = LinearGradient(
+                          0f, lipTop, 0f, lipBottom,
+                          Color.argb(175, 255, 255, 255),
+                          Color.argb(85, 200, 235, 255),
+                          Shader.TileMode.CLAMP
+                      )
+                      canvas.drawRoundRect(lipRect, pillRadius, pillRadius, lipBorderPaint)
+
+                      // 6. Top Specular Highlight Line & Bottom Reflection Line
+                      val highlightStartX = shelfLeft + pillRadius * 0.75f
+                      val highlightEndX = shelfRight - pillRadius * 0.75f
+                      val specularY = lipTop + max(1f, 0.9f * density)
+
+                      if (highlightEndX > highlightStartX) {
+                          specularPaint.shader = LinearGradient(
+                              highlightStartX, specularY, highlightEndX, specularY,
+                              intArrayOf(
+                                  Color.argb(40, 255, 255, 255),
+                                  Color.argb(230, 255, 255, 255),
+                                  Color.argb(245, 255, 255, 255),
+                                  Color.argb(230, 255, 255, 255),
+                                  Color.argb(40, 255, 255, 255)
+                              ),
+                              floatArrayOf(0f, 0.15f, 0.5f, 0.85f, 1f),
+                              Shader.TileMode.CLAMP
+                          )
+                          canvas.drawLine(highlightStartX, specularY, highlightEndX, specularY, specularPaint)
+
+                          val bottomReflectY = lipBottom - max(1.2f, 1.2f * density)
+                          bottomReflectPaint.shader = LinearGradient(
+                              highlightStartX, bottomReflectY, highlightEndX, bottomReflectY,
+                              intArrayOf(
+                                  Color.argb(15, 195, 235, 255),
+                                  Color.argb(125, 220, 245, 255),
+                                  Color.argb(15, 195, 235, 255)
+                              ),
+                              floatArrayOf(0f, 0.5f, 1f),
+                              Shader.TileMode.CLAMP
+                          )
+                          canvas.drawLine(highlightStartX, bottomReflectY, highlightEndX, bottomReflectY, bottomReflectPaint)
+                      }
+                  }
+              }
+          }
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 5. Kotlin Source: ShelfWidgetProvider.kt
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/java/com/example/shelfwidget/ShelfWidgetProvider.kt
+          package com.example.shelfwidget
+
+          import android.app.PendingIntent
+          import android.appwidget.AppWidgetManager
+          import android.appwidget.AppWidgetProvider
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.content.res.Configuration
+          import android.graphics.Bitmap
+          import android.graphics.Canvas
+          import android.graphics.drawable.BitmapDrawable
+          import android.graphics.drawable.Drawable
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.view.View
+          import android.widget.RemoteViews
+          import kotlinx.coroutines.CoroutineScope
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.SupervisorJob
+          import kotlinx.coroutines.launch
+          import kotlin.math.max
+          import kotlin.math.min
+          import kotlin.math.roundToInt
+          import kotlin.math.sqrt
+
+          /**
+           * AppWidgetProvider for ShelfWidget.
+           * Handles responsive geometry (Xiaomi Pad 8 landscape & portrait), procedural shelf rendering,
+           * independent per-widget slot bindings, and unique per-slot PendingIntent launchers.
+           */
+          class ShelfWidgetProvider : AppWidgetProvider() {
+
+              override fun onReceive(context: Context, intent: Intent) {
+                  super.onReceive(context, intent)
+                  val action = intent.action ?: return
+
+                  when (action) {
+                      ACTION_REFRESH_WIDGET -> {
+                          val targetId = intent.getIntExtra(
+                              AppWidgetManager.EXTRA_APPWIDGET_ID,
+                              AppWidgetManager.INVALID_APPWIDGET_ID
+                          )
+                          val pendingResult = goAsync()
+                          widgetScope.launch {
+                              try {
+                                  if (targetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                                      updateWidgetInternal(context.applicationContext, targetId)
+                                  } else {
+                                      updateAllWidgetsInternal(context.applicationContext)
+                                  }
+                              } finally {
+                                  pendingResult.finish()
+                              }
+                          }
+                      }
+                      Intent.ACTION_PACKAGE_ADDED,
+                      Intent.ACTION_PACKAGE_REMOVED,
+                      Intent.ACTION_PACKAGE_REPLACED -> {
+                          val pendingResult = goAsync()
+                          widgetScope.launch {
+                              try {
+                                  updateAllWidgetsInternal(context.applicationContext)
+                              } finally {
+                                  pendingResult.finish()
+                              }
+                          }
+                      }
+                  }
+              }
+
+              override fun onUpdate(
+                  context: Context,
+                  appWidgetManager: AppWidgetManager,
+                  appWidgetIds: IntArray
+              ) {
+                  if (appWidgetIds.isEmpty()) return
+                  val appContext = context.applicationContext
+                  val pendingResult = goAsync()
+                  widgetScope.launch {
+                      try {
+                          val prefs = ShelfPreferences(appContext)
+                          for (appWidgetId in appWidgetIds) {
+                              prefs.ensureWidgetInitialized(appWidgetId)
+                              updateWidgetInternal(appContext, appWidgetId, appWidgetManager)
+                          }
+                      } finally {
+                          pendingResult.finish()
+                      }
+                  }
+              }
+
+              override fun onAppWidgetOptionsChanged(
+                  context: Context,
+                  appWidgetManager: AppWidgetManager,
+                  appWidgetId: Int,
+                  newOptions: Bundle
+              ) {
+                  super.onAppWidgetOptionsChanged(context, appWidgetManager, appWidgetId, newOptions)
+                  val appContext = context.applicationContext
+                  val pendingResult = goAsync()
+                  widgetScope.launch {
+                      try {
+                          updateWidgetInternal(appContext, appWidgetId, appWidgetManager, newOptions)
+                      } finally {
+                          pendingResult.finish()
+                      }
+                  }
+              }
+
+              override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+                  super.onDeleted(context, appWidgetIds)
+                  val prefs = ShelfPreferences(context.applicationContext)
+                  for (appWidgetId in appWidgetIds) {
+                      cancelAllSlotPendingIntents(context.applicationContext, appWidgetId)
+                      prefs.clearWidget(appWidgetId)
+                  }
+              }
+
+              override fun onDisabled(context: Context) {
+                  super.onDisabled(context)
+                  val appContext = context.applicationContext
+                  val manager = AppWidgetManager.getInstance(appContext)
+                  val activeIds = manager.getAppWidgetIds(ComponentName(appContext, ShelfWidgetProvider::class.java))
+                  ShelfPreferences(appContext).pruneOrphanedWidgets(activeIds)
+                  ShelfCanvasRenderer.clearCache()
+              }
+
+              companion object {
+                  const val ACTION_REFRESH_WIDGET = "com.example.shelfwidget.ACTION_REFRESH_WIDGET"
+
+                  private const val DEFAULT_WIDGET_WIDTH_DP = 180
+                  private const val DEFAULT_WIDGET_HEIGHT_DP = 320
+                  private const val MAX_BINDER_SAFE_PIXELS = 420_000
+
+                  private val widgetScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+                  val SLOT_CONTAINER_IDS = intArrayOf(
+                      R.id.slot_0, R.id.slot_1, R.id.slot_2,
+                      R.id.slot_3, R.id.slot_4, R.id.slot_5,
+                      R.id.slot_6, R.id.slot_7, R.id.slot_8,
+                      R.id.slot_9, R.id.slot_10, R.id.slot_11
+                  )
+
+                  val SLOT_ICON_IDS = intArrayOf(
+                      R.id.slot_icon_0, R.id.slot_icon_1, R.id.slot_icon_2,
+                      R.id.slot_icon_3, R.id.slot_icon_4, R.id.slot_icon_5,
+                      R.id.slot_icon_6, R.id.slot_icon_7, R.id.slot_icon_8,
+                      R.id.slot_icon_9, R.id.slot_icon_10, R.id.slot_icon_11
+                  )
+
+                  fun requestUpdateWidget(context: Context, appWidgetId: Int) {
+                      if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                      val appContext = context.applicationContext
+                      widgetScope.launch {
+                          updateWidgetInternal(appContext, appWidgetId)
+                      }
+                  }
+
+                  suspend fun updateSingleWidgetNow(context: Context, appWidgetId: Int) {
+                      if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                      updateWidgetInternal(context.applicationContext, appWidgetId)
+                  }
+
+                  private fun updateAllWidgetsInternal(context: Context) {
+                      val manager = AppWidgetManager.getInstance(context)
+                      val component = ComponentName(context, ShelfWidgetProvider::class.java)
+                      val ids = manager.getAppWidgetIds(component)
+                      val prefs = ShelfPreferences(context)
+                      prefs.pruneOrphanedWidgets(ids)
+                      for (id in ids) {
+                          updateWidgetInternal(context, id, manager)
+                      }
+                  }
+
+                  private fun updateWidgetInternal(
+                      context: Context,
+                      appWidgetId: Int,
+                      manager: AppWidgetManager = AppWidgetManager.getInstance(context),
+                      explicitOptions: Bundle? = null
+                  ) {
+                      if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+
+                      val prefs = ShelfPreferences(context)
+                      prefs.ensureWidgetInitialized(appWidgetId)
+
+                      val startRevision = prefs.getWidgetRevision(appWidgetId)
+                      val slotAssignments = prefs.getAllSlots(appWidgetId)
+
+                      val options = explicitOptions ?: try {
+                          manager.getAppWidgetOptions(appWidgetId)
+                      } catch (_: Throwable) {
+                          Bundle.EMPTY
+                      }
+
+                      val displayMetrics = context.resources.displayMetrics
+                      val density = displayMetrics.density.coerceIn(0.75f, 4.5f)
+                      val isLandscape = context.resources.configuration.orientation ==
+                          Configuration.ORIENTATION_LANDSCAPE
+
+                      val (widthDp, heightDp) = resolveWidgetDimensionsDp(options, isLandscape)
+
+                      var renderWidthPx = max(96, (widthDp * density).roundToInt())
+                      var renderHeightPx = max(160, (heightDp * density).roundToInt())
+                      var renderDensity = density
+
+                      val totalPixels = renderWidthPx.toLong() * renderHeightPx.toLong()
+                      if (totalPixels > MAX_BINDER_SAFE_PIXELS) {
+                          val scale = sqrt(MAX_BINDER_SAFE_PIXELS.toDouble() / totalPixels.toDouble()).toFloat()
+                          renderWidthPx = max(96, (renderWidthPx * scale).roundToInt())
+                          renderHeightPx = max(160, (renderHeightPx * scale).roundToInt())
+                          renderDensity = (density * scale).coerceAtLeast(0.75f)
+                      }
+
+                      val shelfBitmap = ShelfCanvasRenderer.renderShelves(
+                          width = renderWidthPx,
+                          height = renderHeightPx,
+                          density = renderDensity
+                      )
+
+                      val actualHeightPx = max(160, (heightDp * density).roundToInt())
+                      val actualWidthPx = max(96, (widthDp * density).roundToInt())
+                      val bottomPaddingPx = ShelfCanvasRenderer.computeIconBottomOffsetPx(actualHeightPx, density)
+                      val topPaddingPx = max((4f * density).roundToInt(), (actualHeightPx / 4f * 0.10f).roundToInt())
+                      val horizontalSlotPaddingPx = max((4f * density).roundToInt(), (actualWidthPx * 0.025f).roundToInt())
+
+                      val tierHeightPx = actualHeightPx / 4f
+                      val slotWidthPx = actualWidthPx / 3f
+                      val targetIconSizePx = min(
+                          tierHeightPx * 0.58f,
+                          slotWidthPx * 0.66f
+                      ).roundToInt().coerceIn((28f * density).roundToInt(), (64f * density).roundToInt())
+
+                      val views = RemoteViews(context.packageName, R.layout.widget_shelf)
+                      views.setImageViewBitmap(R.id.widget_shelf_bg, shelfBitmap)
+
+                      val pm = context.packageManager
+
+                      for (slotIndex in 0 until ShelfPreferences.TOTAL_SLOTS) {
+                          val containerId = SLOT_CONTAINER_IDS[slotIndex]
+                          val iconViewId = SLOT_ICON_IDS[slotIndex]
+
+                          views.setViewPadding(
+                              containerId,
+                              horizontalSlotPaddingPx,
+                              topPaddingPx,
+                              horizontalSlotPaddingPx,
+                              bottomPaddingPx
+                          )
+
+                          val assignedPackage = slotAssignments[slotIndex]
+                          if (!assignedPackage.isNullOrEmpty()) {
+                              val resolvedApp = resolveLaunchableApp(pm, assignedPackage, targetIconSizePx)
+                              if (resolvedApp != null) {
+                                  views.setImageViewBitmap(iconViewId, resolvedApp.iconBitmap)
+                                  views.setViewVisibility(iconViewId, View.VISIBLE)
+                                  views.setContentDescription(containerId, resolvedApp.label)
+
+                                  val pendingIntent = buildSlotPendingIntent(
+                                      context = context,
+                                      appWidgetId = appWidgetId,
+                                      slotIndex = slotIndex,
+                                      packageName = assignedPackage,
+                                      launchIntent = resolvedApp.launchIntent
+                                  )
+                                  views.setOnClickPendingIntent(containerId, pendingIntent)
+                              } else {
+                                  prefs.clearSlot(appWidgetId, slotIndex)
+                                  bindEmptySlot(context, views, appWidgetId, slotIndex, containerId, iconViewId)
+                              }
+                          } else {
+                              bindEmptySlot(context, views, appWidgetId, slotIndex, containerId, iconViewId)
+                          }
+                      }
+
+                      val currentRevision = prefs.getWidgetRevision(appWidgetId)
+                      if (currentRevision != startRevision && slotAssignments != prefs.getAllSlots(appWidgetId)) {
+                          return
+                      }
+
+                      try {
+                          manager.updateAppWidget(appWidgetId, views)
+                      } catch (_: Throwable) {
+                          // Safe guard against transient launcher host errors during resize
+                      }
+                  }
+
+                  private fun bindEmptySlot(
+                      context: Context,
+                      views: RemoteViews,
+                      appWidgetId: Int,
+                      slotIndex: Int,
+                      containerId: Int,
+                      iconViewId: Int
+                  ) {
+                      views.setImageViewResource(iconViewId, R.drawable.empty_slot_placeholder)
+                      views.setViewVisibility(iconViewId, View.INVISIBLE)
+                      views.setContentDescription(containerId, null)
+
+                      cancelSlotPendingIntent(context, appWidgetId, slotIndex)
+                      views.setOnClickPendingIntent(containerId, null)
+                  }
+
+                  private fun resolveWidgetDimensionsDp(options: Bundle, isLandscape: Boolean): Pair<Int, Int> {
+                      val minWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
+                      val maxWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 0)
+                      val minHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
+                      val maxHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
+
+                      val rawWidthDp = if (isLandscape) {
+                          if (maxWidth > 0) maxWidth else minWidth
+                      } else {
+                          if (minWidth > 0) minWidth else maxWidth
+                      }
+
+                      val rawHeightDp = if (isLandscape) {
+                          if (minHeight > 0) minHeight else maxHeight
+                      } else {
+                          if (maxHeight > 0) maxHeight else minHeight
+                      }
+
+                      val widthDp = if (rawWidthDp > 0) rawWidthDp.coerceIn(100, 960) else DEFAULT_WIDGET_WIDTH_DP
+                      val heightDp = if (rawHeightDp > 0) rawHeightDp.coerceIn(160, 960) else DEFAULT_WIDGET_HEIGHT_DP
+                      return Pair(widthDp, heightDp)
+                  }
+
+                  private data class ResolvedApp(
+                      val label: String,
+                      val iconBitmap: Bitmap,
+                      val launchIntent: Intent
+                  )
+
+                  private fun resolveLaunchableApp(
+                      pm: PackageManager,
+                      packageName: String,
+                      iconSizePx: Int
+                  ): ResolvedApp? {
+                      return try {
+                          val launchIntent = pm.getLaunchIntentForPackage(packageName) ?: run {
+                              val fallbackQuery = Intent(Intent.ACTION_MAIN).apply {
+                                  addCategory(Intent.CATEGORY_LAUNCHER)
+                                  setPackage(packageName)
+                              }
+                              val matches = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                  pm.queryIntentActivities(fallbackQuery, PackageManager.ResolveInfoFlags.of(0L))
+                              } else {
+                                  @Suppress("DEPRECATION")
+                                  pm.queryIntentActivities(fallbackQuery, 0)
+                              }
+                              val firstMatch = matches.firstOrNull()?.activityInfo ?: return null
+                              Intent(Intent.ACTION_MAIN).apply {
+                                  addCategory(Intent.CATEGORY_LAUNCHER)
+                                  setClassName(firstMatch.packageName, firstMatch.name)
+                              }
+                          }
+
+                          val appInfo = pm.getApplicationInfo(packageName, 0)
+                          val label = pm.getApplicationLabel(appInfo)?.toString()?.ifBlank { packageName }
+                              ?: packageName
+                          val drawable = pm.getApplicationIcon(appInfo)
+                          val bitmap = drawableToSizedBitmap(drawable, iconSizePx)
+                          ResolvedApp(label = label, iconBitmap = bitmap, launchIntent = launchIntent)
+                      } catch (_: PackageManager.NameNotFoundException) {
+                          null
+                      } catch (_: Throwable) {
+                          null
+                      }
+                  }
+
+                  fun drawableToSizedBitmap(drawable: Drawable, targetSizePx: Int): Bitmap {
+                      val safeSize = targetSizePx.coerceIn(24, 192)
+                      if (drawable is BitmapDrawable && drawable.bitmap != null && !drawable.bitmap.isRecycled) {
+                          val src = drawable.bitmap
+                          if (src.width == safeSize && src.height == safeSize) {
+                              return src
+                          }
+                      }
+                      val bitmap = Bitmap.createBitmap(safeSize, safeSize, Bitmap.Config.ARGB_8888)
+                      val canvas = Canvas(bitmap)
+                      drawable.setBounds(0, 0, safeSize, safeSize)
+                      drawable.draw(canvas)
+                      return bitmap
+                  }
+
+                  private fun slotRequestCode(appWidgetId: Int, slotIndex: Int): Int {
+                      return (appWidgetId * 100) + slotIndex
+                  }
+
+                  private fun buildSlotPendingIntent(
+                      context: Context,
+                      appWidgetId: Int,
+                      slotIndex: Int,
+                      packageName: String,
+                      launchIntent: Intent
+                  ): PendingIntent {
+                      val isolatedIntent = Intent(launchIntent).apply {
+                          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                          setPackage(packageName)
+                      }
+                      val requestCode = slotRequestCode(appWidgetId, slotIndex)
+                      val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      return PendingIntent.getActivity(context, requestCode, isolatedIntent, flags)
+                  }
+
+                  private fun cancelSlotPendingIntent(context: Context, appWidgetId: Int, slotIndex: Int) {
+                      try {
+                          val dummyIntent = Intent(Intent.ACTION_MAIN).apply {
+                              data = Uri.parse("shelfwidget://empty/$appWidgetId/$slotIndex")
+                          }
+                          val existing = PendingIntent.getActivity(
+                              context,
+                              slotRequestCode(appWidgetId, slotIndex),
+                              dummyIntent,
+                              PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+                          )
+                          existing?.cancel()
+                      } catch (_: Throwable) {
+                          // Safe no-op
+                      }
+                  }
+
+                  private fun cancelAllSlotPendingIntents(context: Context, appWidgetId: Int) {
+                      for (slotIndex in 0 until ShelfPreferences.TOTAL_SLOTS) {
+                          cancelSlotPendingIntent(context, appWidgetId, slotIndex)
+                      }
+                  }
+              }
+          }
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 6. Kotlin Source: MainActivity.kt
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/java/com/example/shelfwidget/MainActivity.kt
+          package com.example.shelfwidget
+
+          import android.app.Activity
+          import android.appwidget.AppWidgetManager
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.graphics.Bitmap
+          import android.graphics.drawable.Drawable
+          import android.os.Build
+          import android.os.Bundle
+          import android.text.Editable
+          import android.text.TextWatcher
+          import android.view.LayoutInflater
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.AdapterView
+          import android.widget.ArrayAdapter
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.FrameLayout
+          import android.widget.ImageButton
+          import android.widget.ImageView
+          import android.widget.ProgressBar
+          import android.widget.Spinner
+          import android.widget.TextView
+          import android.widget.Toast
+          import androidx.appcompat.app.AlertDialog
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.lifecycle.lifecycleScope
+          import androidx.recyclerview.widget.LinearLayoutManager
+          import androidx.recyclerview.widget.RecyclerView
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.Job
+          import kotlinx.coroutines.launch
+          import kotlinx.coroutines.withContext
+          import java.util.Locale
+
+          /**
+           * Companion Configuration & Management Activity ("Shelf Widget Manager").
+           * Supports per-instance widget selection, live 4-shelf visual preview,
+           * searchable RecyclerView app picker, and launcher configuration flow.
+           */
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var shelfPreferences: ShelfPreferences
+              private lateinit var appWidgetManager: AppWidgetManager
+
+              private lateinit var instanceControlsCard: View
+              private lateinit var instanceSpinner: Spinner
+              private lateinit var instanceStatusText: TextView
+              private lateinit var btnPinNewWidget: Button
+              private lateinit var btnClearAllSlots: Button
+
+              private lateinit var emptyWidgetStateContainer: View
+              private lateinit var btnEmptyStatePinWidget: Button
+              private lateinit var btnEmptyStateRefresh: Button
+
+              private lateinit var workspaceContainer: View
+              private lateinit var previewStageContainer: FrameLayout
+              private lateinit var previewShelfBackground: ImageView
+              private lateinit var btnApplyRefresh: Button
+              private lateinit var btnSkipConfigure: Button
+
+              private val slotCardContainers = arrayOfNulls<View>(ShelfPreferences.TOTAL_SLOTS)
+              private val slotIconViews = arrayOfNulls<ImageView>(ShelfPreferences.TOTAL_SLOTS)
+              private val slotLabelViews = arrayOfNulls<TextView>(ShelfPreferences.TOTAL_SLOTS)
+              private val slotBadgeViews = arrayOfNulls<TextView>(ShelfPreferences.TOTAL_SLOTS)
+              private val slotClearButtons = arrayOfNulls<ImageButton>(ShelfPreferences.TOTAL_SLOTS)
+
+              private var activeWidgetIds: IntArray = IntArray(0)
+              private var selectedWidgetId: Int = AppWidgetManager.INVALID_APPWIDGET_ID
+              private var configuredWidgetId: Int = AppWidgetManager.INVALID_APPWIDGET_ID
+              private var isConfigureFlow: Boolean = false
+
+              @Volatile
+              private var cachedInstalledApps: List<LaunchableAppEntry>? = null
+              private var loadAppsJob: Job? = null
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+
+                  shelfPreferences = ShelfPreferences(this)
+                  appWidgetManager = AppWidgetManager.getInstance(this)
+
+                  bindViews()
+                  resolveConfigurationIntent(savedInstanceState)
+                  preloadLaunchableAppsAsync()
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  refreshWidgetInstanceList()
+              }
+
+              override fun onSaveInstanceState(outState: Bundle) {
+                  super.onSaveInstanceState(outState)
+                  outState.putInt(STATE_SELECTED_WIDGET_ID, selectedWidgetId)
+              }
+
+              private fun bindViews() {
+                  instanceControlsCard = findViewById(R.id.card_instance_controls)
+                  instanceSpinner = findViewById(R.id.spinner_widget_instances)
+                  instanceStatusText = findViewById(R.id.text_instance_status)
+                  btnPinNewWidget = findViewById(R.id.btn_pin_new_widget)
+                  btnClearAllSlots = findViewById(R.id.btn_clear_all_slots)
+
+                  emptyWidgetStateContainer = findViewById(R.id.container_empty_widget_state)
+                  btnEmptyStatePinWidget = findViewById(R.id.btn_empty_state_pin_widget)
+                  btnEmptyStateRefresh = findViewById(R.id.btn_empty_state_refresh)
+
+                  workspaceContainer = findViewById(R.id.container_widget_workspace)
+                  previewStageContainer = findViewById(R.id.preview_stage_container)
+                  previewShelfBackground = findViewById(R.id.preview_shelf_bg)
+                  btnApplyRefresh = findViewById(R.id.btn_apply_refresh_widget)
+                  btnSkipConfigure = findViewById(R.id.btn_skip_configuration)
+
+                  val cardIds = intArrayOf(
+                      R.id.preview_slot_0, R.id.preview_slot_1, R.id.preview_slot_2,
+                      R.id.preview_slot_3, R.id.preview_slot_4, R.id.preview_slot_5,
+                      R.id.preview_slot_6, R.id.preview_slot_7, R.id.preview_slot_8,
+                      R.id.preview_slot_9, R.id.preview_slot_10, R.id.preview_slot_11
+                  )
+
+                  for (slotIndex in 0 until ShelfPreferences.TOTAL_SLOTS) {
+                      val card = findViewById<View>(cardIds[slotIndex])
+                      val icon = card.findViewById<ImageView>(R.id.preview_slot_icon)
+                      val label = card.findViewById<TextView>(R.id.preview_slot_label)
+                      val badge = card.findViewById<TextView>(R.id.preview_slot_badge)
+                      val clearBtn = card.findViewById<ImageButton>(R.id.preview_slot_clear)
+
+                      val shelfNum = (slotIndex / ShelfPreferences.SLOTS_PER_SHELF) + 1
+                      val posInShelf = (slotIndex % ShelfPreferences.SLOTS_PER_SHELF) + 1
+                      badge.text = getString(R.string.slot_badge_format, shelfNum, posInShelf)
+
+                      card.setOnClickListener {
+                          if (selectedWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                              showAppPickerDialog(slotIndex)
+                          }
+                      }
+
+                      clearBtn.setOnClickListener {
+                          if (selectedWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                              clearSlotAssignment(slotIndex)
+                          }
+                      }
+
+                      slotCardContainers[slotIndex] = card
+                      slotIconViews[slotIndex] = icon
+                      slotLabelViews[slotIndex] = label
+                      slotBadgeViews[slotIndex] = badge
+                      slotClearButtons[slotIndex] = clearBtn
+                  }
+
+                  previewStageContainer.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                      val w = right - left
+                      val h = bottom - top
+                      if (w > 0 && h > 0 && (w != oldRight - oldLeft || h != oldBottom - oldTop)) {
+                          renderLiveShelfPreviewBackground(w, h)
+                      }
+                  }
+
+                  btnApplyRefresh.setOnClickListener { applyAndRefreshSelectedWidget() }
+                  btnSkipConfigure.setOnClickListener { finishConfigurationWithEmptyOrCurrentState() }
+                  btnClearAllSlots.setOnClickListener { confirmClearAllSlotsForSelectedWidget() }
+                  btnPinNewWidget.setOnClickListener { requestPinShelfWidget() }
+                  btnEmptyStatePinWidget.setOnClickListener { requestPinShelfWidget() }
+                  btnEmptyStateRefresh.setOnClickListener { refreshWidgetInstanceList() }
+              }
+
+              private fun resolveConfigurationIntent(savedInstanceState: Bundle?) {
+                  val extras = intent?.extras
+                  val incomingWidgetId = extras?.getInt(
+                      AppWidgetManager.EXTRA_APPWIDGET_ID,
+                      AppWidgetManager.INVALID_APPWIDGET_ID
+                  ) ?: AppWidgetManager.INVALID_APPWIDGET_ID
+
+                  if (incomingWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                      isConfigureFlow = true
+                      configuredWidgetId = incomingWidgetId
+                      selectedWidgetId = incomingWidgetId
+
+                      shelfPreferences.ensureWidgetInitialized(incomingWidgetId)
+                      val resultValue = Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, incomingWidgetId)
+                      setResult(Activity.RESULT_OK, resultValue)
+                      ShelfWidgetProvider.requestUpdateWidget(this, incomingWidgetId)
+                      btnSkipConfigure.visibility = View.VISIBLE
+                  } else {
+                      isConfigureFlow = false
+                      btnSkipConfigure.visibility = View.GONE
+                      if (savedInstanceState != null) {
+                          selectedWidgetId = savedInstanceState.getInt(
+                              STATE_SELECTED_WIDGET_ID,
+                              AppWidgetManager.INVALID_APPWIDGET_ID
+                          )
+                      }
+                  }
+              }
+
+              private fun refreshWidgetInstanceList() {
+                  val component = ComponentName(this, ShelfWidgetProvider::class.java)
+                  val managerIds = appWidgetManager.getAppWidgetIds(component).sorted().toIntArray()
+
+                  val combinedIds = if (configuredWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID &&
+                      !managerIds.contains(configuredWidgetId)
+                  ) {
+                      (managerIds.toList() + configuredWidgetId).sorted().toIntArray()
+                  } else {
+                      managerIds
+                  }
+
+                  activeWidgetIds = combinedIds
+
+                  if (activeWidgetIds.isEmpty()) {
+                      selectedWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+                      instanceControlsCard.visibility = View.GONE
+                      workspaceContainer.visibility = View.GONE
+                      emptyWidgetStateContainer.visibility = View.VISIBLE
+                      return
+                  }
+
+                  emptyWidgetStateContainer.visibility = View.GONE
+                  instanceControlsCard.visibility = View.VISIBLE
+                  workspaceContainer.visibility = View.VISIBLE
+
+                  if (!activeWidgetIds.contains(selectedWidgetId)) {
+                      selectedWidgetId = if (configuredWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                          configuredWidgetId
+                      } else {
+                          activeWidgetIds.first()
+                      }
+                  }
+
+                  populateInstanceSpinner()
+                  refreshPreviewForSelectedWidget()
+              }
+
+              private fun populateInstanceSpinner() {
+                  val labels = activeWidgetIds.mapIndexed { index, widgetId ->
+                      val filledCount = shelfPreferences.getAllSlots(widgetId).size
+                      val suffix = if (widgetId == configuredWidgetId && isConfigureFlow) " • New" else ""
+                      getString(
+                          R.string.widget_instance_option_format,
+                          index + 1,
+                          widgetId,
+                          filledCount,
+                          ShelfPreferences.TOTAL_SLOTS,
+                          suffix
+                      )
+                  }
+
+                  val adapter = ArrayAdapter(
+                      this,
+                      R.layout.item_spinner_instance,
+                      labels
+                  ).apply {
+                      setDropDownViewResource(R.layout.item_spinner_dropdown_instance)
+                  }
+
+                  instanceSpinner.onItemSelectedListener = null
+                  instanceSpinner.adapter = adapter
+
+                  val selectedIdx = activeWidgetIds.indexOf(selectedWidgetId).coerceAtLeast(0)
+                  instanceSpinner.setSelection(selectedIdx, false)
+
+                  instanceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                      override fun onItemSelected(
+                          parent: AdapterView<*>?,
+                          view: View?,
+                          position: Int,
+                          id: Long
+                      ) {
+                          if (position in activeWidgetIds.indices) {
+                              val newId = activeWidgetIds[position]
+                              if (newId != selectedWidgetId) {
+                                  selectedWidgetId = newId
+                                  refreshPreviewForSelectedWidget()
+                              }
+                          }
+                      }
+
+                      override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+                  }
+              }
+
+              private fun renderLiveShelfPreviewBackground(widthPx: Int, heightPx: Int) {
+                  if (widthPx <= 0 || heightPx <= 0) return
+                  val density = resources.displayMetrics.density
+                  val bitmap: Bitmap = ShelfCanvasRenderer.renderShelves(widthPx, heightPx, density)
+                  previewShelfBackground.setImageBitmap(bitmap)
+              }
+
+              private fun refreshPreviewForSelectedWidget() {
+                  val widgetId = selectedWidgetId
+                  if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+
+                  if (previewStageContainer.width > 0 && previewStageContainer.height > 0) {
+                      renderLiveShelfPreviewBackground(previewStageContainer.width, previewStageContainer.height)
+                  } else {
+                      previewStageContainer.post {
+                          renderLiveShelfPreviewBackground(
+                              previewStageContainer.width,
+                              previewStageContainer.height
+                          )
+                      }
+                  }
+
+                  val assignments = shelfPreferences.getAllSlots(widgetId)
+                  val pm = packageManager
+                  val iconSizePx = (44f * resources.displayMetrics.density).toInt().coerceAtLeast(48)
+                  var validAssignedCount = 0
+
+                  for (slotIndex in 0 until ShelfPreferences.TOTAL_SLOTS) {
+                      val iconView = slotIconViews[slotIndex] ?: continue
+                      val labelView = slotLabelViews[slotIndex] ?: continue
+                      val clearBtn = slotClearButtons[slotIndex] ?: continue
+                      val cardView = slotCardContainers[slotIndex] ?: continue
+
+                      val packageName = assignments[slotIndex]
+                      if (!packageName.isNullOrEmpty()) {
+                          val resolved = resolveAppPreview(pm, packageName, iconSizePx)
+                          if (resolved != null) {
+                              validAssignedCount++
+                              iconView.setImageBitmap(resolved.second)
+                              iconView.alpha = 1.0f
+                              labelView.text = resolved.first
+                              labelView.setTextColor(getColor(R.color.shelf_text_primary))
+                              clearBtn.visibility = View.VISIBLE
+                              cardView.isSelected = true
+                          } else {
+                              shelfPreferences.clearSlot(widgetId, slotIndex)
+                              bindEmptyPreviewSlot(iconView, labelView, clearBtn, cardView)
+                          }
+                      } else {
+                          bindEmptyPreviewSlot(iconView, labelView, clearBtn, cardView)
+                      }
+                  }
+
+                  instanceStatusText.text = getString(
+                      R.string.instance_status_summary_format,
+                      widgetId,
+                      validAssignedCount,
+                      ShelfPreferences.TOTAL_SLOTS,
+                      activeWidgetIds.size
+                  )
+              }
+
+              private fun bindEmptyPreviewSlot(
+                  iconView: ImageView,
+                  labelView: TextView,
+                  clearBtn: ImageButton,
+                  cardView: View
+              ) {
+                  iconView.setImageResource(R.drawable.ic_slot_add)
+                  iconView.alpha = 0.72f
+                  labelView.text = getString(R.string.slot_empty_tap_to_add)
+                  labelView.setTextColor(getColor(R.color.shelf_text_secondary))
+                  clearBtn.visibility = View.GONE
+                  cardView.isSelected = false
+              }
+
+              private fun resolveAppPreview(
+                  pm: PackageManager,
+                  packageName: String,
+                  iconSizePx: Int
+              ): Pair<String, Bitmap>? {
+                  return try {
+                      val launchIntent = pm.getLaunchIntentForPackage(packageName) ?: return null
+                      val appInfo = pm.getApplicationInfo(packageName, 0)
+                      val label = pm.getApplicationLabel(appInfo)?.toString()?.ifBlank { packageName }
+                          ?: packageName
+                      val iconDrawable = pm.getApplicationIcon(appInfo)
+                      val bitmap = ShelfWidgetProvider.drawableToSizedBitmap(iconDrawable, iconSizePx)
+                      if (launchIntent.component == null && launchIntent.`package` == null) {
+                          launchIntent.setPackage(packageName)
+                      }
+                      Pair(label, bitmap)
+                  } catch (_: Throwable) {
+                      null
+                  }
+              }
+
+              private fun clearSlotAssignment(slotIndex: Int) {
+                  val widgetId = selectedWidgetId
+                  if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                  shelfPreferences.clearSlot(widgetId, slotIndex)
+                  refreshPreviewForSelectedWidget()
+                  populateInstanceSpinner()
+                  ShelfWidgetProvider.requestUpdateWidget(this, widgetId)
+              }
+
+              private fun confirmClearAllSlotsForSelectedWidget() {
+                  val widgetId = selectedWidgetId
+                  if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+
+                  AlertDialog.Builder(this)
+                      .setTitle(R.string.dialog_clear_all_title)
+                      .setMessage(getString(R.string.dialog_clear_all_message, widgetId))
+                      .setPositiveButton(R.string.action_clear_all) { _, _ ->
+                          shelfPreferences.clearAllSlotsForWidget(widgetId)
+                          refreshPreviewForSelectedWidget()
+                          populateInstanceSpinner()
+                          ShelfWidgetProvider.requestUpdateWidget(this, widgetId)
+                          Toast.makeText(
+                              this,
+                              getString(R.string.toast_cleared_widget_slots, widgetId),
+                              Toast.LENGTH_SHORT
+                          ).show()
+                      }
+                      .setNegativeButton(android.R.string.cancel, null)
+                      .show()
+              }
+
+              private fun applyAndRefreshSelectedWidget() {
+                  val widgetId = selectedWidgetId
+                  if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+
+                  lifecycleScope.launch {
+                      ShelfWidgetProvider.updateSingleWidgetNow(this@MainActivity, widgetId)
+
+                      if (isConfigureFlow && widgetId == configuredWidgetId) {
+                          val resultIntent = Intent().putExtra(
+                              AppWidgetManager.EXTRA_APPWIDGET_ID,
+                              configuredWidgetId
+                          )
+                          setResult(Activity.RESULT_OK, resultIntent)
+                          Toast.makeText(
+                              this@MainActivity,
+                              getString(R.string.toast_widget_updated, widgetId),
+                              Toast.LENGTH_SHORT
+                          ).show()
+                          finish()
+                      } else {
+                          Toast.makeText(
+                              this@MainActivity,
+                              getString(R.string.toast_widget_updated, widgetId),
+                              Toast.LENGTH_SHORT
+                          ).show()
+                      }
+                  }
+              }
+
+              private fun finishConfigurationWithEmptyOrCurrentState() {
+                  if (configuredWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                      shelfPreferences.ensureWidgetInitialized(configuredWidgetId)
+                      lifecycleScope.launch {
+                          ShelfWidgetProvider.updateSingleWidgetNow(this@MainActivity, configuredWidgetId)
+                          val resultIntent = Intent().putExtra(
+                              AppWidgetManager.EXTRA_APPWIDGET_ID,
+                              configuredWidgetId
+                          )
+                          setResult(Activity.RESULT_OK, resultIntent)
+                          finish()
+                      }
+                  } else {
+                      finish()
+                  }
+              }
+
+              private fun requestPinShelfWidget() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                      appWidgetManager.isRequestPinAppWidgetSupported
+                  ) {
+                      val provider = ComponentName(this, ShelfWidgetProvider::class.java)
+                      val pinned = appWidgetManager.requestPinAppWidget(provider, null, null)
+                      if (!pinned) {
+                          Toast.makeText(this, R.string.pin_widget_manual_hint, Toast.LENGTH_LONG).show()
+                      }
+                  } else {
+                      Toast.makeText(this, R.string.pin_widget_manual_hint, Toast.LENGTH_LONG).show()
+                  }
+              }
+
+              private fun preloadLaunchableAppsAsync() {
+                  if (loadAppsJob?.isActive == true) return
+                  loadAppsJob = lifecycleScope.launch {
+                      cachedInstalledApps = queryLaunchableAppsOffMainThread(applicationContext)
+                  }
+              }
+
+              private fun showAppPickerDialog(slotIndex: Int) {
+                  val widgetId = selectedWidgetId
+                  if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+
+                  val dialogView = LayoutInflater.from(this)
+                      .inflate(R.layout.dialog_app_picker, null, false)
+
+                  val titleText = dialogView.findViewById<TextView>(R.id.picker_title_text)
+                  val subtitleText = dialogView.findViewById<TextView>(R.id.picker_subtitle_text)
+                  val searchInput = dialogView.findViewById<EditText>(R.id.edit_search_apps)
+                  val btnClearSlotInPicker = dialogView.findViewById<Button>(R.id.btn_picker_clear_slot)
+                  val progressBar = dialogView.findViewById<ProgressBar>(R.id.picker_progress_bar)
+                  val emptySearchText = dialogView.findViewById<TextView>(R.id.picker_empty_text)
+                  val recyclerView = dialogView.findViewById<RecyclerView>(R.id.recycler_app_picker)
+
+                  val shelfNum = (slotIndex / ShelfPreferences.SLOTS_PER_SHELF) + 1
+                  val posInShelf = (slotIndex % ShelfPreferences.SLOTS_PER_SHELF) + 1
+                  titleText.text = getString(R.string.picker_dialog_title_format, shelfNum, posInShelf)
+
+                  val currentPkg = shelfPreferences.getAppForSlot(widgetId, slotIndex)
+                  subtitleText.text = if (!currentPkg.isNullOrEmpty()) {
+                      getString(R.string.picker_dialog_subtitle_assigned, widgetId, currentPkg)
+                  } else {
+                      getString(R.string.picker_dialog_subtitle_empty, widgetId)
+                  }
+
+                  val dialog = AlertDialog.Builder(this)
+                      .setView(dialogView)
+                      .setNegativeButton(android.R.string.cancel, null)
+                      .create()
+
+                  btnClearSlotInPicker.visibility = if (currentPkg.isNullOrEmpty()) View.GONE else View.VISIBLE
+                  btnClearSlotInPicker.setOnClickListener {
+                      clearSlotAssignment(slotIndex)
+                      dialog.dismiss()
+                  }
+
+                  val adapter = AppPickerAdapter { selectedApp ->
+                      val launchable = packageManager.getLaunchIntentForPackage(selectedApp.packageName) != null
+                      if (!launchable) {
+                          Toast.makeText(this, R.string.error_app_no_longer_available, Toast.LENGTH_SHORT).show()
+                          cachedInstalledApps = null
+                          preloadLaunchableAppsAsync()
+                          dialog.dismiss()
+                          return@AppPickerAdapter
+                      }
+
+                      shelfPreferences.saveAppToSlot(widgetId, slotIndex, selectedApp.packageName)
+                      refreshPreviewForSelectedWidget()
+                      populateInstanceSpinner()
+                      ShelfWidgetProvider.requestUpdateWidget(this, widgetId)
+                      dialog.dismiss()
+                  }
+
+                  recyclerView.layoutManager = LinearLayoutManager(this)
+                  recyclerView.adapter = adapter
+
+                  searchInput.addTextChangedListener(object : TextWatcher {
+                      override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                      override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                          val hasMatches = adapter.filter(s?.toString().orEmpty())
+                          emptySearchText.visibility = if (hasMatches) View.GONE else View.VISIBLE
+                      }
+                      override fun afterTextChanged(s: Editable?) = Unit
+                  })
+
+                  dialog.show()
+
+                  lifecycleScope.launch {
+                      progressBar.visibility = View.VISIBLE
+                      val apps = cachedInstalledApps ?: queryLaunchableAppsOffMainThread(applicationContext).also {
+                          cachedInstalledApps = it
+                      }
+                      progressBar.visibility = View.GONE
+                      val hasMatches = adapter.submitFullList(apps, searchInput.text?.toString().orEmpty())
+                      emptySearchText.visibility = if (hasMatches) View.GONE else View.VISIBLE
+                  }
+              }
+
+              private suspend fun queryLaunchableAppsOffMainThread(
+                  context: Context
+              ): List<LaunchableAppEntry> = withContext(Dispatchers.IO) {
+                  val pm = context.packageManager
+                  val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                      addCategory(Intent.CATEGORY_LAUNCHER)
+                  }
+
+                  val resolveInfos = try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                          pm.queryIntentActivities(mainIntent, PackageManager.ResolveInfoFlags.of(0L))
+                      } else {
+                          @Suppress("DEPRECATION")
+                          pm.queryIntentActivities(mainIntent, 0)
+                      }
+                  } catch (_: Throwable) {
+                      emptyList()
+                  }
+
+                  val uniqueByPackage = LinkedHashMap<String, LaunchableAppEntry>()
+                  for (info in resolveInfos) {
+                      val activityInfo = info.activityInfo ?: continue
+                      val pkgName = activityInfo.packageName ?: continue
+                      if (uniqueByPackage.containsKey(pkgName)) continue
+
+                      val label = try {
+                          info.loadLabel(pm)?.toString()?.trim()?.ifEmpty { pkgName } ?: pkgName
+                      } catch (_: Throwable) {
+                          pkgName
+                      }
+
+                      val icon: Drawable? = try {
+                          info.loadIcon(pm)
+                      } catch (_: Throwable) {
+                          null
+                      }
+
+                      uniqueByPackage[pkgName] = LaunchableAppEntry(
+                          label = label,
+                          packageName = pkgName,
+                          icon = icon
+                      )
+                  }
+
+                  uniqueByPackage.values.sortedWith(
+                      compareBy<LaunchableAppEntry> { it.label.lowercase(Locale.ROOT) }
+                          .thenBy { it.packageName.lowercase(Locale.ROOT) }
+                  )
+              }
+
+              data class LaunchableAppEntry(
+                  val label: String,
+                  val packageName: String,
+                  val icon: Drawable?
+              )
+
+              private inner class AppPickerAdapter(
+                  private val onAppSelected: (LaunchableAppEntry) -> Unit
+              ) : RecyclerView.Adapter<AppPickerAdapter.AppViewHolder>() {
+
+                  private var allApps: List<LaunchableAppEntry> = emptyList()
+                  private var filteredApps: List<LaunchableAppEntry> = emptyList()
+
+                  fun submitFullList(apps: List<LaunchableAppEntry>, currentQuery: String): Boolean {
+                      allApps = apps
+                      return filter(currentQuery)
+                  }
+
+                  fun filter(rawQuery: String): Boolean {
+                      val q = rawQuery.trim().lowercase(Locale.ROOT)
+                      filteredApps = if (q.isEmpty()) {
+                          allApps
+                      } else {
+                          allApps.filter {
+                              it.label.lowercase(Locale.ROOT).contains(q) ||
+                                  it.packageName.lowercase(Locale.ROOT).contains(q)
+                          }
+                      }
+                      notifyDataSetChanged()
+                      return filteredApps.isNotEmpty()
+                  }
+
+                  override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): AppViewHolder {
+                      val view = LayoutInflater.from(parent.context)
+                          .inflate(R.layout.item_app_picker, parent, false)
+                      return AppViewHolder(view)
+                  }
+
+                  override fun onBindViewHolder(holder: AppViewHolder, position: Int) {
+                      holder.bind(filteredApps[position])
+                  }
+
+                  override fun getItemCount(): Int = filteredApps.size
+
+                  inner class AppViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+                      private val iconView: ImageView = itemView.findViewById(R.id.item_app_icon)
+                      private val nameView: TextView = itemView.findViewById(R.id.item_app_name)
+                      private val packageView: TextView = itemView.findViewById(R.id.item_app_package)
+
+                      fun bind(entry: LaunchableAppEntry) {
+                          nameView.text = entry.label
+                          packageView.text = entry.packageName
+                          if (entry.icon != null) {
+                              iconView.setImageDrawable(entry.icon)
+                          } else {
+                              iconView.setImageResource(R.drawable.ic_launcher_foreground)
+                          }
+                          itemView.setOnClickListener { onAppSelected(entry) }
+                      }
+                  }
+              }
+
+              companion object {
+                  private const val STATE_SELECTED_WIDGET_ID = "state_selected_widget_id"
+              }
+          }
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 7. Widget Metadata XML: res/xml/shelf_widget_info.xml
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/res/xml/shelf_widget_info.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+              android:configure="com.example.shelfwidget.MainActivity"
+              android:description="@string/widget_description"
+              android:initialLayout="@layout/widget_shelf"
+              android:maxResizeHeight="640dp"
+              android:maxResizeWidth="640dp"
+              android:minHeight="250dp"
+              android:minResizeHeight="180dp"
+              android:minResizeWidth="110dp"
+              android:minWidth="140dp"
+              android:previewImage="@drawable/widget_preview_graphic"
+              android:previewLayout="@layout/widget_shelf"
+              android:resizeMode="horizontal|vertical"
+              android:targetCellHeight="4"
+              android:targetCellWidth="2"
+              android:updatePeriodMillis="0"
+              android:widgetCategory="home_screen"
+              android:widgetFeatures="reconfigurable|configuration_optional" />
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 8. Widget RemoteViews Layout: res/layout/widget_shelf.xml
+          #    4 equally weighted shelf rows x 3 equally weighted slots (slot_0 .. slot_11)
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/res/layout/widget_shelf.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/widget_root"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="@android:color/transparent">
+
+              <ImageView
+                  android:id="@+id/widget_shelf_bg"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:contentDescription="@string/widget_bg_content_description"
+                  android:scaleType="fitXY" />
+
+              <LinearLayout
+                  android:id="@+id/widget_rows_container"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:baselineAligned="false"
+                  android:orientation="vertical"
+                  android:paddingStart="10dp"
+                  android:paddingEnd="10dp"
+                  android:weightSum="4">
+
+                  <!-- SHELF 1: slot_0, slot_1, slot_2 -->
+                  <LinearLayout
+                      android:id="@+id/shelf_row_1"
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:baselineAligned="false"
+                      android:orientation="horizontal"
+                      android:weightSum="3">
+
+                      <FrameLayout android:id="@+id/slot_0" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_0" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+
+                      <FrameLayout android:id="@+id/slot_1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_1" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+
+                      <FrameLayout android:id="@+id/slot_2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_2" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+                  </LinearLayout>
+
+                  <!-- SHELF 2: slot_3, slot_4, slot_5 -->
+                  <LinearLayout
+                      android:id="@+id/shelf_row_2"
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:baselineAligned="false"
+                      android:orientation="horizontal"
+                      android:weightSum="3">
+
+                      <FrameLayout android:id="@+id/slot_3" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_3" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+
+                      <FrameLayout android:id="@+id/slot_4" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_4" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+
+                      <FrameLayout android:id="@+id/slot_5" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_5" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+                  </LinearLayout>
+
+                  <!-- SHELF 3: slot_6, slot_7, slot_8 -->
+                  <LinearLayout
+                      android:id="@+id/shelf_row_3"
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:baselineAligned="false"
+                      android:orientation="horizontal"
+                      android:weightSum="3">
+
+                      <FrameLayout android:id="@+id/slot_6" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_6" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+
+                      <FrameLayout android:id="@+id/slot_7" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_7" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+
+                      <FrameLayout android:id="@+id/slot_8" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_8" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+                  </LinearLayout>
+
+                  <!-- SHELF 4: slot_9, slot_10, slot_11 -->
+                  <LinearLayout
+                      android:id="@+id/shelf_row_4"
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:baselineAligned="false"
+                      android:orientation="horizontal"
+                      android:weightSum="3">
+
+                      <FrameLayout android:id="@+id/slot_9" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_9" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+
+                      <FrameLayout android:id="@+id/slot_10" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_10" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+
+                      <FrameLayout android:id="@+id/slot_11" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:paddingStart="4dp" android:paddingTop="6dp" android:paddingEnd="4dp" android:paddingBottom="16dp">
+                          <ImageView android:id="@+id/slot_icon_11" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom|center_horizontal" android:adjustViewBounds="true" android:contentDescription="@null" android:scaleType="fitCenter" android:src="@drawable/empty_slot_placeholder" android:visibility="invisible" />
+                      </FrameLayout>
+                  </LinearLayout>
+
+              </LinearLayout>
+
+          </FrameLayout>
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 9. Companion Activity Layout: res/layout/activity_main.xml
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/res/layout/activity_main.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="@color/shelf_bg_dark"
+              android:fillViewport="true">
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:padding="20dp">
+
+                  <!-- App Bar Header -->
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:gravity="center_vertical"
+                      android:orientation="horizontal"
+                      android:paddingBottom="14dp">
+
+                      <ImageView
+                          android:layout_width="42dp"
+                          android:layout_height="42dp"
+                          android:contentDescription="@null"
+                          android:src="@drawable/ic_launcher_foreground" />
+
+                      <LinearLayout
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_marginStart="12dp"
+                          android:layout_weight="1"
+                          android:orientation="vertical">
+
+                          <TextView
+                              android:id="@+id/text_manager_title"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:text="@string/manager_title"
+                              android:textColor="@color/shelf_text_primary"
+                              android:textSize="22sp"
+                              android:textStyle="bold" />
+
+                          <TextView
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:text="@string/manager_subtitle"
+                              android:textColor="@color/shelf_text_secondary"
+                              android:textSize="13sp" />
+                      </LinearLayout>
+                  </LinearLayout>
+
+                  <!-- Widget Instance Selector Card -->
+                  <LinearLayout
+                      android:id="@+id/card_instance_controls"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:background="@drawable/bg_manager_card"
+                      android:orientation="vertical"
+                      android:padding="16dp">
+
+                      <TextView
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:text="@string/label_select_widget_instance"
+                          android:textAllCaps="true"
+                          android:textColor="@color/shelf_accent_cyan"
+                          android:textSize="11sp"
+                          android:textStyle="bold" />
+
+                      <Spinner
+                          android:id="@+id/spinner_widget_instances"
+                          android:layout_width="match_parent"
+                          android:layout_height="48dp"
+                          android:layout_marginTop="6dp"
+                          android:background="@drawable/bg_spinner_field"
+                          android:paddingStart="12dp"
+                          android:paddingEnd="12dp" />
+
+                      <TextView
+                          android:id="@+id/text_instance_status"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginTop="8dp"
+                          android:textColor="@color/shelf_text_secondary"
+                          android:textSize="13sp" />
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginTop="12dp"
+                          android:orientation="horizontal">
+
+                          <Button
+                              android:id="@+id/btn_pin_new_widget"
+                              style="?android:attr/buttonBarButtonStyle"
+                              android:layout_width="0dp"
+                              android:layout_height="42dp"
+                              android:layout_marginEnd="6dp"
+                              android:layout_weight="1"
+                              android:background="@drawable/bg_button_secondary"
+                              android:text="@string/action_add_another_widget"
+                              android:textAllCaps="false"
+                              android:textColor="@color/shelf_text_primary"
+                              android:textSize="13sp" />
+
+                          <Button
+                              android:id="@+id/btn_clear_all_slots"
+                              style="?android:attr/buttonBarButtonStyle"
+                              android:layout_width="0dp"
+                              android:layout_height="42dp"
+                              android:layout_marginStart="6dp"
+                              android:layout_weight="1"
+                              android:background="@drawable/bg_button_secondary"
+                              android:text="@string/action_clear_all_slots"
+                              android:textAllCaps="false"
+                              android:textColor="@color/shelf_danger_soft"
+                              android:textSize="13sp" />
+                      </LinearLayout>
+                  </LinearLayout>
+
+                  <!-- Empty State (shown when no ShelfWidget instance exists on home screen) -->
+                  <LinearLayout
+                      android:id="@+id/container_empty_widget_state"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="16dp"
+                      android:background="@drawable/bg_manager_card"
+                      android:gravity="center_horizontal"
+                      android:orientation="vertical"
+                      android:padding="28dp"
+                      android:visibility="gone">
+
+                      <ImageView
+                          android:layout_width="84dp"
+                          android:layout_height="84dp"
+                          android:contentDescription="@null"
+                          android:src="@drawable/widget_preview_graphic" />
+
+                      <TextView
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:layout_marginTop="16dp"
+                          android:gravity="center"
+                          android:text="@string/empty_state_title"
+                          android:textColor="@color/shelf_text_primary"
+                          android:textSize="18sp"
+                          android:textStyle="bold" />
+
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginTop="10dp"
+                          android:gravity="center"
+                          android:lineSpacingExtra="3dp"
+                          android:text="@string/empty_state_instructions"
+                          android:textColor="@color/shelf_text_secondary"
+                          android:textSize="14sp" />
+
+                      <Button
+                          android:id="@+id/btn_empty_state_pin_widget"
+                          android:layout_width="match_parent"
+                          android:layout_height="48dp"
+                          android:layout_marginTop="20dp"
+                          android:background="@drawable/bg_button_primary"
+                          android:text="@string/action_pin_widget_to_home"
+                          android:textAllCaps="false"
+                          android:textColor="@color/shelf_bg_dark"
+                          android:textSize="15sp"
+                          android:textStyle="bold" />
+
+                      <Button
+                          android:id="@+id/btn_empty_state_refresh"
+                          android:layout_width="match_parent"
+                          android:layout_height="44dp"
+                          android:layout_marginTop="10dp"
+                          android:background="@drawable/bg_button_secondary"
+                          android:text="@string/action_refresh_widget_list"
+                          android:textAllCaps="false"
+                          android:textColor="@color/shelf_text_primary"
+                          android:textSize="14sp" />
+                  </LinearLayout>
+
+                  <!-- Active Widget 4-Shelf Interactive Preview & Slot Configuration -->
+                  <LinearLayout
+                      android:id="@+id/container_widget_workspace"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="16dp"
+                      android:orientation="vertical">
+
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginBottom="8dp"
+                          android:text="@string/preview_section_hint"
+                          android:textColor="@color/shelf_text_secondary"
+                          android:textSize="13sp" />
+
+                      <FrameLayout
+                          android:id="@+id/preview_stage_container"
+                          android:layout_width="match_parent"
+                          android:layout_height="520dp"
+                          android:background="@drawable/bg_preview_wallpaper">
+
+                          <ImageView
+                              android:id="@+id/preview_shelf_bg"
+                              android:layout_width="match_parent"
+                              android:layout_height="match_parent"
+                              android:contentDescription="@null"
+                              android:scaleType="fitXY" />
+
+                          <LinearLayout
+                              android:layout_width="match_parent"
+                              android:layout_height="match_parent"
+                              android:baselineAligned="false"
+                              android:orientation="vertical"
+                              android:paddingStart="18dp"
+                              android:paddingEnd="18dp"
+                              android:weightSum="4">
+
+                              <!-- Preview Shelf 1 (Slots 0, 1, 2) -->
+                              <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:baselineAligned="false" android:gravity="bottom" android:orientation="horizontal" android:paddingTop="6dp" android:paddingBottom="18dp" android:weightSum="3">
+                                  <include android:id="@+id/preview_slot_0" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                                  <include android:id="@+id/preview_slot_1" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                                  <include android:id="@+id/preview_slot_2" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                              </LinearLayout>
+
+                              <!-- Preview Shelf 2 (Slots 3, 4, 5) -->
+                              <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:baselineAligned="false" android:gravity="bottom" android:orientation="horizontal" android:paddingTop="6dp" android:paddingBottom="18dp" android:weightSum="3">
+                                  <include android:id="@+id/preview_slot_3" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                                  <include android:id="@+id/preview_slot_4" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                                  <include android:id="@+id/preview_slot_5" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                              </LinearLayout>
+
+                              <!-- Preview Shelf 3 (Slots 6, 7, 8) -->
+                              <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:baselineAligned="false" android:gravity="bottom" android:orientation="horizontal" android:paddingTop="6dp" android:paddingBottom="18dp" android:weightSum="3">
+                                  <include android:id="@+id/preview_slot_6" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                                  <include android:id="@+id/preview_slot_7" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                                  <include android:id="@+id/preview_slot_8" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                              </LinearLayout>
+
+                              <!-- Preview Shelf 4 (Slots 9, 10, 11) -->
+                              <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:baselineAligned="false" android:gravity="bottom" android:orientation="horizontal" android:paddingTop="6dp" android:paddingBottom="18dp" android:weightSum="3">
+                                  <include android:id="@+id/preview_slot_9" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                                  <include android:id="@+id/preview_slot_10" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                                  <include android:id="@+id/preview_slot_11" layout="@layout/item_preview_slot" android:layout_width="0dp" android:layout_height="match_parent" android:layout_margin="4dp" android:layout_weight="1" />
+                              </LinearLayout>
+
+                          </LinearLayout>
+                      </FrameLayout>
+
+                      <Button
+                          android:id="@+id/btn_apply_refresh_widget"
+                          android:layout_width="match_parent"
+                          android:layout_height="52dp"
+                          android:layout_marginTop="18dp"
+                          android:background="@drawable/bg_button_primary"
+                          android:text="@string/action_apply_and_refresh"
+                          android:textAllCaps="false"
+                          android:textColor="@color/shelf_bg_dark"
+                          android:textSize="16sp"
+                          android:textStyle="bold" />
+
+                      <Button
+                          android:id="@+id/btn_skip_configuration"
+                          android:layout_width="match_parent"
+                          android:layout_height="44dp"
+                          android:layout_marginTop="10dp"
+                          android:background="@drawable/bg_button_secondary"
+                          android:text="@string/action_skip_configuration"
+                          android:textAllCaps="false"
+                          android:textColor="@color/shelf_text_secondary"
+                          android:textSize="14sp"
+                          android:visibility="gone" />
+
+                  </LinearLayout>
+
+              </LinearLayout>
+          </ScrollView>
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 10. Preview Slot Card & Spinner Item Layouts
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/res/layout/item_preview_slot.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="@drawable/bg_slot_card"
+              android:clickable="true"
+              android:focusable="true"
+              android:padding="6dp">
+
+              <TextView
+                  android:id="@+id/preview_slot_badge"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_gravity="top|start"
+                  android:textColor="@color/shelf_accent_cyan"
+                  android:textSize="10sp"
+                  android:textStyle="bold" />
+
+              <ImageButton
+                  android:id="@+id/preview_slot_clear"
+                  android:layout_width="22dp"
+                  android:layout_height="22dp"
+                  android:layout_gravity="top|end"
+                  android:background="@android:color/transparent"
+                  android:contentDescription="@string/action_clear_slot"
+                  android:padding="2dp"
+                  android:scaleType="fitCenter"
+                  android:src="@drawable/ic_slot_clear"
+                  android:visibility="gone" />
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_gravity="bottom|center_horizontal"
+                  android:gravity="center_horizontal"
+                  android:orientation="vertical">
+
+                  <ImageView
+                      android:id="@+id/preview_slot_icon"
+                      android:layout_width="40dp"
+                      android:layout_height="40dp"
+                      android:contentDescription="@null"
+                      android:scaleType="fitCenter"
+                      android:src="@drawable/ic_slot_add" />
+
+                  <TextView
+                      android:id="@+id/preview_slot_label"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="4dp"
+                      android:ellipsize="end"
+                      android:gravity="center"
+                      android:maxLines="1"
+                      android:text="@string/slot_empty_tap_to_add"
+                      android:textColor="@color/shelf_text_secondary"
+                      android:textSize="11sp" />
+              </LinearLayout>
+
+          </FrameLayout>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/layout/item_spinner_instance.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <TextView xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@android:id/text1"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:ellipsize="end"
+              android:gravity="center_vertical"
+              android:maxLines="1"
+              android:paddingStart="4dp"
+              android:paddingTop="10dp"
+              android:paddingEnd="4dp"
+              android:paddingBottom="10dp"
+              android:textColor="@color/shelf_text_primary"
+              android:textSize="14sp"
+              android:textStyle="bold" />
+          EOF
+
+          cat << 'EOF' > app/src/main/res/layout/item_spinner_dropdown_instance.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <TextView xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@android:id/text1"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:background="@color/shelf_card_dark"
+              android:ellipsize="end"
+              android:gravity="center_vertical"
+              android:maxLines="1"
+              android:paddingStart="16dp"
+              android:paddingTop="12dp"
+              android:paddingEnd="16dp"
+              android:paddingBottom="12dp"
+              android:textColor="@color/shelf_text_primary"
+              android:textSize="14sp" />
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 11. App Picker Dialog & Item Layouts
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/res/layout/dialog_app_picker.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:background="@color/shelf_card_dark"
+              android:orientation="vertical"
+              android:padding="18dp">
+
+              <TextView
+                  android:id="@+id/picker_title_text"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:textColor="@color/shelf_text_primary"
+                  android:textSize="18sp"
+                  android:textStyle="bold" />
+
+              <TextView
+                  android:id="@+id/picker_subtitle_text"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="2dp"
+                  android:textColor="@color/shelf_text_secondary"
+                  android:textSize="12sp" />
+
+              <Button
+                  android:id="@+id/btn_picker_clear_slot"
+                  android:layout_width="match_parent"
+                  android:layout_height="40dp"
+                  android:layout_marginTop="10dp"
+                  android:background="@drawable/bg_button_secondary"
+                  android:text="@string/action_remove_assigned_app"
+                  android:textAllCaps="false"
+                  android:textColor="@color/shelf_danger_soft"
+                  android:textSize="13sp"
+                  android:visibility="gone" />
+
+              <EditText
+                  android:id="@+id/edit_search_apps"
+                  android:layout_width="match_parent"
+                  android:layout_height="46dp"
+                  android:layout_marginTop="10dp"
+                  android:background="@drawable/bg_spinner_field"
+                  android:hint="@string/hint_search_apps"
+                  android:imeOptions="actionSearch"
+                  android:importantForAutofill="no"
+                  android:inputType="text"
+                  android:maxLines="1"
+                  android:paddingStart="14dp"
+                  android:paddingEnd="14dp"
+                  android:textColor="@color/shelf_text_primary"
+                  android:textColorHint="@color/shelf_text_secondary"
+                  android:textSize="14sp" />
+
+              <FrameLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="360dp"
+                  android:layout_marginTop="10dp">
+
+                  <androidx.recyclerview.widget.RecyclerView
+                      android:id="@+id/recycler_app_picker"
+                      android:layout_width="match_parent"
+                      android:layout_height="match_parent"
+                      android:scrollbars="vertical" />
+
+                  <ProgressBar
+                      android:id="@+id/picker_progress_bar"
+                      android:layout_width="40dp"
+                      android:layout_height="40dp"
+                      android:layout_gravity="center"
+                      android:visibility="gone" />
+
+                  <TextView
+                      android:id="@+id/picker_empty_text"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_gravity="center"
+                      android:text="@string/picker_no_matching_apps"
+                      android:textColor="@color/shelf_text_secondary"
+                      android:textSize="14sp"
+                      android:visibility="gone" />
+              </FrameLayout>
+
+          </LinearLayout>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/layout/item_app_picker.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:background="?android:attr/selectableItemBackground"
+              android:gravity="center_vertical"
+              android:orientation="horizontal"
+              android:paddingStart="8dp"
+              android:paddingTop="10dp"
+              android:paddingEnd="8dp"
+              android:paddingBottom="10dp">
+
+              <ImageView
+                  android:id="@+id/item_app_icon"
+                  android:layout_width="42dp"
+                  android:layout_height="42dp"
+                  android:contentDescription="@null"
+                  android:scaleType="fitCenter" />
+
+              <LinearLayout
+                  android:layout_width="0dp"
+                  android:layout_height="wrap_content"
+                  android:layout_marginStart="14dp"
+                  android:layout_weight="1"
+                  android:orientation="vertical">
+
+                  <TextView
+                      android:id="@+id/item_app_name"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:ellipsize="end"
+                      android:maxLines="1"
+                      android:textColor="@color/shelf_text_primary"
+                      android:textSize="15sp"
+                      android:textStyle="bold" />
+
+                  <TextView
+                      android:id="@+id/item_app_package"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="2dp"
+                      android:ellipsize="end"
+                      android:maxLines="1"
+                      android:textColor="@color/shelf_text_secondary"
+                      android:textSize="12sp" />
+              </LinearLayout>
+
+          </LinearLayout>
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 12. Drawable & Mipmap XML Resources
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/res/drawable/empty_slot_placeholder.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <size android:width="48dp" android:height="48dp" />
+              <solid android:color="@android:color/transparent" />
+          </shape>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_slot_add.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="36dp" android:height="36dp" android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#337CE8FF" android:pathData="M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2Z" />
+              <path android:fillColor="#CCBDF2FF" android:pathData="M13,7H11V11H7V13H11V17H13V13H17V11H13V7Z" />
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_slot_clear.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="20dp" android:height="20dp" android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#55000000" android:pathData="M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2Z" />
+              <path android:fillColor="#FFFF8A80" android:pathData="M16.24,7.76L13.41,10.59L16.24,13.41L14.83,14.83L12,12L9.17,14.83L7.76,13.41L10.59,10.59L7.76,7.76L9.17,6.34L12,9.17L14.83,6.34L16.24,7.76Z" />
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/widget_preview_graphic.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="180dp" android:height="240dp" android:viewportWidth="180" android:viewportHeight="240">
+              <path android:fillColor="#1A2639" android:pathData="M16,0h148c8.8,0 16,7.2 16,16v208c0,8.8 -7.2,16 -16,16H16c-8.8,0 -16,-7.2 -16,-16V16C0,7.2 7.2,0 16,0z" />
+              <path android:fillColor="#88BDF2FF" android:pathData="M16,46h148a5,5 0 0,1 0,10H16a5,5 0 0,1 0,-10z" />
+              <path android:fillColor="#88BDF2FF" android:pathData="M16,102h148a5,5 0 0,1 0,10H16a5,5 0 0,1 0,-10z" />
+              <path android:fillColor="#88BDF2FF" android:pathData="M16,158h148a5,5 0 0,1 0,10H16a5,5 0 0,1 0,-10z" />
+              <path android:fillColor="#88BDF2FF" android:pathData="M16,214h148a5,5 0 0,1 0,10H16a5,5 0 0,1 0,-10z" />
+              <path android:fillColor="#FF64B5F6" android:pathData="M30,18h20v24h-20z M80,18h20v24h-20z M130,18h20v24h-20z" />
+              <path android:fillColor="#FF81C784" android:pathData="M30,74h20v24h-20z M80,74h20v24h-20z M130,74h20v24h-20z" />
+              <path android:fillColor="#FFFFB74D" android:pathData="M30,130h20v24h-20z M80,130h20v24h-20z M130,130h20v24h-20z" />
+              <path android:fillColor="#FFBA68C8" android:pathData="M30,186h20v24h-20z M80,186h20v24h-20z M130,186h20v24h-20z" />
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher_background.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#0E1726" android:pathData="M0,0h108v108h-108z" />
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher_foreground.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#997CE8FF" android:pathData="M24,36h60a4,4 0 0,1 0,8H24a4,4 0 0,1 0,-8z" />
+              <path android:fillColor="#BB7CE8FF" android:pathData="M24,54h60a4,4 0 0,1 0,8H24a4,4 0 0,1 0,-8z" />
+              <path android:fillColor="#EEBDF2FF" android:pathData="M24,72h60a4,4 0 0,1 0,8H24a4,4 0 0,1 0,-8z" />
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_background" />
+              <foreground android:drawable="@drawable/ic_launcher_foreground" />
+          </adaptive-icon>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_background" />
+              <foreground android:drawable="@drawable/ic_launcher_foreground" />
+          </adaptive-icon>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/bg_manager_card.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="@color/shelf_card_dark" />
+              <corners android:radius="16dp" />
+              <stroke android:width="1dp" android:color="#26BDF2FF" />
+          </shape>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/bg_spinner_field.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="#182438" />
+              <corners android:radius="10dp" />
+              <stroke android:width="1dp" android:color="#407CE8FF" />
+          </shape>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/bg_button_primary.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="@color/shelf_accent_cyan" />
+              <corners android:radius="12dp" />
+          </shape>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/bg_button_secondary.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="#1E2C42" />
+              <corners android:radius="10dp" />
+              <stroke android:width="1dp" android:color="#33BDF2FF" />
+          </shape>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/bg_preview_wallpaper.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <gradient android:angle="135" android:centerColor="#162844" android:endColor="#0F1C30" android:startColor="#1E3A5F" />
+              <corners android:radius="20dp" />
+              <stroke android:width="1dp" android:color="#38BDF2FF" />
+          </shape>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/bg_slot_card.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <selector xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:state_selected="true">
+                  <shape android:shape="rectangle">
+                      <solid android:color="#24FFFFFF" />
+                      <corners android:radius="12dp" />
+                      <stroke android:width="1dp" android:color="#667CE8FF" />
+                  </shape>
+              </item>
+              <item>
+                  <shape android:shape="rectangle">
+                      <solid android:color="#12FFFFFF" />
+                      <corners android:radius="12dp" />
+                      <stroke android:width="1dp" android:color="#24FFFFFF" />
+                  </shape>
+              </item>
+          </selector>
+          EOF
+
+          # ------------------------------------------------------------------------------
+          # 13. Values XML Resources: colors.xml, strings.xml, themes.xml
+          # ------------------------------------------------------------------------------
+          cat << 'EOF' > app/src/main/res/values/colors.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="shelf_bg_dark">#0B121E</color>
+              <color name="shelf_card_dark">#131E30</color>
+              <color name="shelf_accent_cyan">#7CE8FF</color>
+              <color name="shelf_text_primary">#F2F7FF</color>
+              <color name="shelf_text_secondary">#9EB2CC</color>
+              <color name="shelf_danger_soft">#FF8A80</color>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/strings.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">ShelfWidget</string>
+              <string name="widget_name">Glass Shelf (4×3)</string>
+              <string name="widget_description">Procedural 2.5D frosted glass shelf with 12 independent app shortcuts across 4 tiers.</string>
+              <string name="widget_bg_content_description">Frosted glass shelves</string>
+
+              <string name="manager_title">Shelf Widget Manager</string>
+              <string name="manager_subtitle">Independent 4-shelf, 12-slot configuration per widget instance</string>
+              <string name="label_select_widget_instance">Active Widget Instance</string>
+              <string name="widget_instance_option_format">Instance #%1$d (Widget ID %2$d) — %3$d/%4$d slots%5$s</string>
+              <string name="instance_status_summary_format">Editing Widget ID #%1$d • %2$d of %3$d slots assigned (%4$d total active widget(s) on home screen)</string>
+
+              <string name="action_add_another_widget">+ Pin New Widget</string>
+              <string name="action_clear_all_slots">Clear All 12 Slots</string>
+              <string name="action_apply_and_refresh">Apply &amp; Refresh Widget</string>
+              <string name="action_skip_configuration">Skip Configuration (Keep Empty Glass Shelves)</string>
+              <string name="action_pin_widget_to_home">Add ShelfWidget to Home Screen</string>
+              <string name="action_refresh_widget_list">Refresh Active Widget List</string>
+              <string name="action_clear_slot">Clear slot</string>
+              <string name="action_remove_assigned_app">Empty / Clear This Slot</string>
+              <string name="action_clear_all">Clear All</string>
+
+              <string name="empty_state_title">No ShelfWidget Placed Yet</string>
+              <string name="empty_state_instructions">Add a ShelfWidget to your Xiaomi Pad 8 or Android home screen first (long-press the home screen → Widgets → ShelfWidget, or tap the button below). Each widget you place gets its own independent set of 12 app slots.</string>
+              <string name="preview_section_hint">Tap any of the 12 slots on the 4 shelves below to assign or change its app. Tap × on a populated slot to clear it.</string>
+              <string name="slot_empty_tap_to_add">Empty (Tap to add)</string>
+              <string name="slot_badge_format">S%1$d•%2$d</string>
+
+              <string name="picker_dialog_title_format">Select App — Shelf %1$d, Slot %2$d</string>
+              <string name="picker_dialog_subtitle_assigned">Widget #%1$d • Currently assigned: %2$s</string>
+              <string name="picker_dialog_subtitle_empty">Widget #%1$d • Currently unassigned</string>
+              <string name="hint_search_apps">Search by app name or package…</string>
+              <string name="picker_no_matching_apps">No launchable apps match your search.</string>
+
+              <string name="dialog_clear_all_title">Clear All 12 Slots?</string>
+              <string name="dialog_clear_all_message">This will clear all 12 app assignments for Widget ID #%1$d only. Other ShelfWidget instances will not be affected.</string>
+              <string name="toast_cleared_widget_slots">Cleared all 12 slots for Widget #%1$d</string>
+              <string name="toast_widget_updated">Refreshed ShelfWidget #%1$d</string>
+              <string name="pin_widget_manual_hint">Long-press an empty area on your home screen, open Widgets, and drag ShelfWidget onto the screen.</string>
+              <string name="error_app_no_longer_available">Selected app is no longer installed or launchable.</string>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/themes.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.ShelfWidget" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+                  <item name="colorPrimary">@color/shelf_accent_cyan</item>
+                  <item name="colorPrimaryVariant">@color/shelf_card_dark</item>
+                  <item name="colorOnPrimary">@color/shelf_bg_dark</item>
+                  <item name="android:statusBarColor">@color/shelf_bg_dark</item>
+                  <item name="android:navigationBarColor">@color/shelf_bg_dark</item>
+                  <item name="android:windowBackground">@color/shelf_bg_dark</item>
+              </style>
+          </resources>
+          EOF
+
+          echo "==> Generating Gradle Wrapper scripts & jar using Gradle 8.7..."
+          if command -v gradle >/dev/null 2>&1; then
+            gradle wrapper --gradle-version 8.7 --distribution-type bin --no-daemon
+            chmod +x gradlew
+          fi
+
+          echo "==> Verifying generated project tree..."
+          ls -la app/src/main/java/com/example/shelfwidget/
+          ls -la app/src/main/res/layout/
+
+      - name: Build Debug APK with Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "==> Running assembleDebug..."
+          if [ -x "./gradlew" ]; then
+            ./gradlew assembleDebug --stacktrace --no-daemon
+          else
+            gradle assembleDebug --stacktrace --no-daemon
+          fi
+
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: Expected APK not found at $APK_PATH" >&2
+            exit 1
+          fi
+          echo "==> APK successfully built:"
+          ls -lh "$APK_PATH"
+
+      - name: Upload Debug APK Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShelfWidget-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
