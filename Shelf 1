@@ -30,7 +30,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Configure Android SDK Licenses (Zero sdkmanager / setup-android dependency)
+      - name: Configure Android SDK & Pre-Accept Google Licenses
         shell: bash
         run: |
           set -euo pipefail
@@ -38,13 +38,9 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
 
-          # Write official Google Android SDK license hashes directly.
-          # Android Gradle Plugin 8.4.1 uses these hashes to validate pre-installed SDK 34
-          # packages on ubuntu-latest (and auto-download any missing ones during assembleDebug)
-          # without ever invoking sdkmanager or android-actions/setup-android@v3.
           mkdir -p "$SDK_DIR/licenses"
-          printf "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n" > "$SDK_DIR/licenses/android-sdk-license"
-          printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK_DIR/licenses/android-sdk-preview-license"
+          printf "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n859f317696f67ef3d7f30a50a5560e7834b43903\n" > "$SDK_DIR/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n504667f4c0de7af1a06de9f4b1727b84351f2910\n" > "$SDK_DIR/licenses/android-sdk-preview-license"
           echo "==> Configured Android SDK at $SDK_DIR with pre-accepted license hashes."
 
       - name: Set up Gradle 8.7
@@ -81,6 +77,16 @@ jobs:
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           EOF
+
+          cat << 'EOF' > settings.gradle.kts
+          rootProject.name = "ShelfWidget"
+          EOF
+
+          if command -v gradle >/dev/null 2>&1; then
+            echo "==> Bootstrapping Gradle 8.7 wrapper..."
+            gradle wrapper --gradle-version 8.7 --distribution-type bin --no-daemon
+            chmod +x gradlew
+          fi
 
           cat << 'EOF' > settings.gradle.kts
           pluginManagement {
@@ -2691,9 +2697,8 @@ jobs:
           </resources>
           EOF
 
-          echo "==> Generating Gradle Wrapper scripts & jar using Gradle 8.7..."
-          if command -v gradle >/dev/null 2>&1; then
-            gradle wrapper --gradle-version 8.7 --distribution-type bin --no-daemon
+          echo "==> Ensuring gradlew is executable if present..."
+          if [ -f "./gradlew" ]; then
             chmod +x gradlew
           fi
 
